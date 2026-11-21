@@ -63,3 +63,15 @@ screenshots/           1-board.png, 2-detail.png, 3-filtered.png
 check-board.mjs        local gate verification
 LICENSE                MIT
 ```
+
+## make.fun
+
+[![make.fun](https://make.fun/badge/token-radar-01.svg)](https://make.fun/c/token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/lexlion11/token-radar/rank.svg)](https://make.fun/c/token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/lexlion11/token-radar/reward.svg)](https://make.fun/c/token-radar-01)
+
+## make.fun
+
+[![make.fun](https://make.fun/badge/token-radar-01.svg)](https://make.fun/c/token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/lexlion11/token-radar/rank.svg)](https://make.fun/c/token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/lexlion11/token-radar/reward.svg)](https://make.fun/c/token-radar-01)

@@ -1,3 +1,4 @@
+// Token Radar — radar-2 model: ranks pre-token DeFi protocols by implied value from the snapshot.
 // A working token-radar-01 entry (Node 22, standard library only).
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every

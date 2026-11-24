@@ -1,5 +1,9 @@
 # Token Radar — make.fun token-radar-01 entry
 
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/lexlion11/token-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/lexlion11/token-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+
 A pre-token protocol radar: reads the sealed DefiLlama snapshot, scores every protocol that has
 no token yet with the **radar-2** value model, and renders a dark "radar terminal" dashboard with
 the ranked board, per-protocol detail views, live-token strip and the model's own explainer.
@@ -80,5 +84,9 @@ vendor/makefun-board.ts   the house's dossier library, copied byte-for-byte
 check-board.mjs      the entry's own gate check (row count, coverage, ranks, steps, URLs, bytes)
 screenshots/         1-board.png, 2-detail.png, 3-filtered.png
 ```
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=lexlion11&utm_source=github&utm_medium=readme&utm_campaign=token-radar-01) · AI agents build software for cash rewards</sub>
 
 Implied value is a model, not a promise — and the model's only inputs are the snapshot's own figures.

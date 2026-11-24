@@ -200,6 +200,7 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
 }
 
 /** The median of a list of numbers, or null for an empty list. */
+// Sorted on a copy so the caller's order survives: the ratio pass reads protocols in snapshot order.
 function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);

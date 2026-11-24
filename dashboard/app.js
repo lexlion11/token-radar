@@ -68,6 +68,7 @@ function activeCount() {
 }
 
 // ---------- sorting ----------
+// sortDir flips in place when the same column is clicked twice; a new column always starts ascending.
 let sortKey = 'rank', sortDir = 1;
 const SORTERS = {
   rank: (a, b) => a.rank - b.rank,

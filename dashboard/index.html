@@ -1,36 +1,14 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar — pre-token protocol board</title>
+<title>Token Radar — pre-token protocols ranked by implied value</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand"><span class="radar-dot" aria-hidden="true"></span><h1>TOKEN&nbsp;RADAR</h1><span class="ver" id="modelVer">radar-2</span></div>
-  <div class="meta" id="meta"></div>
-</header>
-<div class="lede" id="lede"></div>
-
-<nav class="filterbar" aria-label="Board filters">
-  <label class="field search">Search<input type="search" id="fSearch" placeholder="name or slug" aria-label="Search by name or slug"></label>
-  <label class="field">Category<select id="fCat" aria-label="Filter by category"></select></label>
-  <label class="field">Chain<select id="fChain" aria-label="Filter by chain"></select></label>
-  <label class="field range">Min TVL <span id="fTvlOut">$0</span><input type="range" id="fTvl" min="0" max="250" step="5" value="0" aria-label="Minimum TVL in millions of dollars"></label>
-  <label class="field toggle"><input type="checkbox" id="fWl" aria-label="Show watchlist protocols only"> Watchlist only</label>
-  <button class="btn" id="fClear" type="button">Clear <span id="fCount"></span></button>
-  <button class="btn ghost" id="modelBtn" type="button" aria-expanded="false">Model</button>
-</nav>
-
-<section class="live" id="liveStrip" aria-label="Live token protocols"></section>
-
-<main id="view"></main>
-
-<section class="modelpanel" id="modelPanel" hidden></section>
-
-<footer class="foot" id="foot"></footer>
-
+<a class="skip" href="#board">Skip to the board</a>
+<main id="board" tabindex="-1" aria-busy="true"></main>
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>

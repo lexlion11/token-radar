@@ -1,4 +1,4 @@
-// Token Radar dashboard controller, radar-5: reads window.RADAR (written beside this page as
+// Token Radar dashboard controller, radar-6: reads window.RADAR (written beside this page as
 // data.js by main.ts), renders the ranked board with a spotlight rail, filters with chips, a
 // per-protocol detail view with a factor-contribution chart, the live-token strip, the model
 // explainer, keyboard navigation and CSV export. No framework, no network, one hash router.
@@ -47,7 +47,7 @@
   $('modelver').textContent = R.model_version;
   var stats = [
     ['WATCHLIST', R.watchlist_size, 'g'], ['EARLY RADAR', R.early_size, 'a'],
-    ['UNPRICED', R.unpriced_size, 'c'], ['ON THE BOARD', R.board_size, ''],
+    ['ON THE BOARD', R.board_size, ''],
     ['LIVE SET ASIDE', R.live_size, ''],
   ];
   $('stats').innerHTML = stats.map(function (s) {
@@ -92,7 +92,7 @@
       if (q && r.name.toLowerCase().indexOf(q) < 0 && r.slug.indexOf(q) < 0) return false;
       if (state.cat && r.category !== state.cat) return false;
       if (state.chain && r.chains.indexOf(state.chain) < 0) return false;
-      if (state.status === 'product' ? r.standalone : state.status && r.token_status !== state.status) return false;
+      if (state.status && r.token_status !== state.status) return false;
       if (r.tvl_usd < state.min * 1e6) return false;
       if (state.wl && !r.watchlist) return false;
       return true;
@@ -114,7 +114,7 @@
     if (state.q) c.push(['q', 'search "' + state.q + '"']);
     if (state.cat) c.push(['cat', 'category ' + state.cat]);
     if (state.chain) c.push(['chain', 'chain ' + state.chain]);
-    if (state.status) c.push(['status', state.status === 'product' ? 'products only' : state.status + ' only']);
+    if (state.status) c.push(['status', state.status + ' only']);
     if (state.min > 0) c.push(['min', 'min TVL ' + fmtM(state.min * 1e6)]);
     if (state.wl) c.push(['wl', 'watchlist only']);
     $('chips').innerHTML = c.map(function (x) {
@@ -168,14 +168,6 @@
     return '<span class="fseg mini" title="factor mix — each segment is that factor\'s strength against the board\'s own range">' + segs.join('') + '</span>';
   }
 
-  /** The momentum signal the Trend column carries: ▲ above +2%, ▼ below −2%, otherwise flat. */
-  function trendOf(r) {
-    if (r.change_7d == null) return '<span class="flat">—</span>';
-    if (r.change_7d > 2) return '<span class="up" title="' + r.change_7d.toFixed(1) + '% 7-day TVL change">▲</span>';
-    if (r.change_7d < -2) return '<span class="down" title="' + r.change_7d.toFixed(1) + '% 7-day TVL change">▼</span>';
-    return '<span class="flat" title="' + r.change_7d.toFixed(1) + '% 7-day TVL change">—</span>';
-  }
-
   function renderTable() {
     var rows = filtered();
     var head = document.querySelectorAll('#board thead th');
@@ -189,9 +181,8 @@
       var ch = r.chains.length > 2 ? r.chains.slice(0, 2).join(', ') + ' +' + (r.chains.length - 2) : r.chains.join(', ');
       var cc = catColor(r.category);
       var bar = Math.max(3, Math.round((r.implied_value_usd / maxImplied) * 88));
-      var dot = r.watchlist ? '<span class="wl-dot" title="on the watchlist"></span>'
-        : r.token_status === 'unpriced' ? '<span class="unp-dot" title="unpriced: token symbol on record, no market cap"></span>' : '';
-      var trClass = (r.rank <= 3 ? 'r' + r.rank + ' ' : '') + (i === selIdx ? 'sel ' : '') + (r.standalone ? '' : 'prod');
+      var dot = r.watchlist ? '<span class="wl-dot" title="on the watchlist"></span>' : '';
+      var trClass = (r.rank <= 3 ? 'r' + r.rank + ' ' : '') + (i === selIdx ? 'sel ' : '');
       return '<tr data-slug="' + esc(r.slug) + '"' + (trClass ? ' class="' + trClass.trim() + '"' : '') + '>' +
         '<td class="rank num">' + r.rank + '</td>' +
         '<td class="name">' + dot + esc(r.name) + '<span class="slug">' + esc(r.slug) + '</span></td>' +
@@ -199,7 +190,6 @@
         '<td class="chips-cell">' + esc(ch) + '</td>' +
         '<td class="num">' + fmtM(r.tvl_usd) + '</td>' +
         '<td class="num ' + cls(r.change_7d) + '">' + fmtPct(r.change_7d) + '</td>' +
-        '<td class="num trend">' + trendOf(r) + '</td>' +
         '<td class="mix">' + factorMix(r) + '</td>' +
         '<td class="num implied">' + fmtM(r.implied_value_usd) + '<span class="ibar" style="width:' + bar + 'px"></span></td></tr>';
     }).join('');
@@ -254,9 +244,7 @@
     for (var i = 0; i < R.rows.length; i++) if (R.rows[i].slug === slug) { r = R.rows[i]; break; }
     if (!r) { location.hash = ''; show('boardview'); return; }
     var m = M;
-    var statusWord = r.token_status === 'unpriced'
-      ? 'unpriced deployment — token symbol on record, no market cap the snapshot carries'
-      : (r.standalone ? 'pre-token — no token on record' : 'pre-token product — wrapped or staked, no token of its own');
+    var statusWord = 'pre-token — no token, no gecko id and no symbol on record';
     var cells = [
       ['TVL', fmtM(r.tvl_usd)], ['7D TVL CHANGE', '<span class="' + cls(r.change_7d) + '">' + fmtPct(r.change_7d) + '</span>'],
       ['IMPLIED VALUE', '<span style="color:var(--amber)">' + fmtM(r.implied_value_usd) + '</span>'],
@@ -300,7 +288,6 @@
       '<div class="detail-grid">' + cells.map(function (c) { return '<div class="dcell"><span class="k">' + c[0] + '</span><div class="v num">' + c[1] + '</div></div>'; }).join('') + '</div>' +
       '<h2>Implied value breakdown — ' + fmtM(r.tvl_usd) + ' TVL × ' + m.base_multiple + ' base, then five multipliers (log scale)</h2>' +
       '<div class="contrib"><div class="cbar">' + cbar + '</div><div class="clegend">' + clegend + '</div>' +
-      (r.admission_discount < 1 ? '<div class="fbar note"><span class="fk"></span><span>admission discount ×' + r.admission_discount + ': ' + statusWord + ', so the board ranks it at ' + Math.round(r.admission_discount * 100) + '% of its raw implied value</span></div>' : '') +
       '</div>' +
       '<h2>Factor multipliers</h2>' +
       '<div class="factor-bars">' + factors.map(function (f) {
@@ -352,8 +339,6 @@
       ['chain_weight', 'chain breadth weight'],
       ['chain_max', 'chain count saturates at'],
       ['unknown_age_days', 'age assumed when listed_at is null'],
-      ['product_discount', 'admission discount for wrapped/staked pre-token products'],
-      ['unpriced_discount', 'admission discount for unpriced deployments'],
     ];
     function val(k) {
       var parts = k.split(' / ');
@@ -368,8 +353,7 @@
       'category = 1 + ' + M.category_weight + ' × log1p(min(catMedian, ' + M.category_ratio_cap + ')) / log1p(' + M.category_ratio_cap + ')<br>' +
       'chain = 1 + ' + M.chain_weight + ' × log1p(min(chains, ' + M.chain_max + ')) / log1p(' + M.chain_max + ')<br>' +
       'catMedian = median mcap/TVL of live-token protocols in this category (overall median below ' + M.category_min_samples + ' samples)<br>' +
-      'admission: every pre-token protocol that is not an exchange (wrapped and staked products included, flagged), plus unpriced deployments that pass the product test<br>' +
-      'admission discount: ×' + M.product_discount + ' for wrapped/staked pre-token products, ×' + M.unpriced_discount + ' for unpriced deployments, ×1 for standalone pre-token</div>' +
+      'the board ranks protocols that record no token at all — no market cap, no gecko id, no symbol — and that stand on their own rather than as a wrapped, staked or bridged product of a token that trades; protocols with a token are shown apart, in the live strip, at the market\'s own value and never ranked</div>' +
       rows.map(function (r) { return '<div class="mrow"><span class="mk">' + r[0] + '</span><span class="mv">' + r[1] + '</span></div>'; }).join('') +
       '<div class="mrow"><span class="mk">MODEL_VERSION</span><span class="mv">' + R.model_version + '</span></div>';
   }
@@ -410,13 +394,13 @@
   // ---------- CSV export ----------
   function exportCSV() {
     var rows = filtered();
-    var head = ['rank', 'slug', 'name', 'category', 'chains', 'tvl_usd', 'change_7d', 'age_days', 'implied_value_usd', 'watchlist', 'token_status', 'standalone', 'farm_capital_usd', 'farm_hold_days', 'admission_discount', 'growth_multiplier', 'maturity_multiplier', 'duration_multiplier', 'category_multiplier', 'chain_multiplier'];
+    var head = ['rank', 'slug', 'name', 'category', 'chains', 'tvl_usd', 'change_7d', 'age_days', 'implied_value_usd', 'watchlist', 'token_status', 'farm_capital_usd', 'farm_hold_days', 'growth_multiplier', 'maturity_multiplier', 'duration_multiplier', 'category_multiplier', 'chain_multiplier'];
     function csv(v) {
       v = String(v == null ? '' : v);
       return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
     }
     var lines = [head.join(',')].concat(rows.map(function (r) {
-      return [r.rank, r.slug, r.name, r.category || '', r.chains.join('|'), r.tvl_usd, r.change_7d, r.age_days, r.implied_value_usd, r.watchlist ? 1 : 0, r.token_status, r.standalone ? 1 : 0, r.farm_capital_usd, r.farm_hold_days, r.admission_discount, r.growth_multiplier, r.maturity_multiplier, r.duration_multiplier, r.category_multiplier, r.chain_multiplier].map(csv).join(',');
+      return [r.rank, r.slug, r.name, r.category || '', r.chains.join('|'), r.tvl_usd, r.change_7d, r.age_days, r.implied_value_usd, r.watchlist ? 1 : 0, r.token_status, r.farm_capital_usd, r.farm_hold_days, r.growth_multiplier, r.maturity_multiplier, r.duration_multiplier, r.category_multiplier, r.chain_multiplier].map(csv).join(',');
     }));
     var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');

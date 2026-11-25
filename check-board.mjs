@@ -60,9 +60,17 @@ for (const r of rows) {
 check(stepsOk, `farm steps are 3..12 x 20..600 chars${stepsBad ? ' (' + stepsBad + ')' : ''}`);
 
 // 6. every row carries the fields the dashboard needs
-const fields = ['rank', 'slug', 'name', 'category', 'chains', 'tvl_usd', 'change_7d', 'mcap_usd', 'listed_at', 'gecko_id', 'symbol', 'token_status', 'age_days', 'implied_value_usd', 'model', 'farm_steps'];
-const fieldOk = rows.every((r) => fields.every((f) => f in r) && r.model && 'category_multiplier' in r.model && 'chain_multiplier' in r.model);
-check(fieldOk, 'every row carries the BoardRow fields (incl. radar-2 model factors)');
+const fields = ['rank', 'slug', 'name', 'category', 'chains', 'tvl_usd', 'change_7d', 'mcap_usd', 'listed_at', 'gecko_id', 'symbol', 'token_status', 'age_days', 'implied_value_usd', 'implied_low_usd', 'implied_high_usd', 'watchlist', 'farm_steps', 'farm_cost_usd', 'farm_hours', 'farm_lockup_days', 'farm_verdict', 'farm_verdict_class', 'farm_value_per_hour', 'model'];
+const fieldOk = rows.every((r) => fields.every((f) => f in r) && r.model && 'log_ratio' in r.model && 'implied_multiple' in r.model && Array.isArray(r.model.factors) && r.model.factors.length > 0);
+check(fieldOk, 'every row carries the radar-7 BoardRow fields (incl. the value range, the farm verdict and the fitted factors)');
+
+// 6b. the value range is honest: low <= base <= high, and the range is really a range
+const rangeOk = rows.every((r) => r.implied_low_usd <= r.implied_value_usd && r.implied_value_usd <= r.implied_high_usd && r.implied_low_usd > 0);
+check(rangeOk, 'every row carries a range with low <= base <= high');
+
+// 6c. the farm verdict is present on every row and is computed, not blank
+const verdictOk = rows.every((r) => typeof r.farm_verdict === 'string' && r.farm_verdict.length > 20 && ['worth', 'marginal', 'not-worth'].includes(r.farm_verdict_class) && r.farm_hours > 0 && r.farm_cost_usd > 0);
+check(verdictOk, 'every row carries a costed farm verdict with hours and a cost');
 
 // 7. dashboard source: no http/https anywhere in the source text, and under budget
 const dashDir = join(dir, 'dashboard');

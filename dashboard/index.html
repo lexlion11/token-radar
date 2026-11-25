@@ -34,6 +34,7 @@
       <label class="fsearch">Search<input type="search" id="f-q" placeholder="name or slug  (/)"></label>
       <label>Category<select id="f-cat"></select></label>
       <label>Chain<select id="f-chain"></select></label>
+      <label>Status<select id="f-status"><option value="">All statuses</option><option value="pre-token">Pre-token</option><option value="unpriced">Unpriced</option><option value="product">Products (wrapped/staked)</option></select></label>
       <label class="frange">Min TVL <span id="f-min-label">$0</span><input type="range" id="f-min" min="0" max="500" step="5" value="0"></label>
       <label class="ftoggle"><input type="checkbox" id="f-wl"> Watchlist only</label>
       <button type="button" id="f-clear" class="ghost">Clear <span id="f-count"></span></button>
@@ -51,6 +52,8 @@
             <th data-k="chains">Chains</th>
             <th data-k="tvl_usd" class="num">TVL</th>
             <th data-k="change_7d" class="num">7d</th>
+            <th class="num trend" title="momentum signal from the 7-day TVL change: ▲ above +2%, ▼ below −2%">Trend</th>
+            <th class="mix" title="each factor's strength against the board's own range: base (TVL), momentum, maturity, no-token duration, category multiple, chain breadth">Factor mix</th>
             <th data-k="implied_value_usd" class="num">Implied value</th>
           </tr></thead>
           <tbody id="rows"></tbody>

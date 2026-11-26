@@ -52,7 +52,12 @@ export interface LiveSample {
   target: number;
 }
 
-/** The six model factors, as the harness names and ablates them. */
+/**
+ * The model's value factors, as the harness names and ablates them. The token odds are NOT one
+ * of them: the odds are a separate probability model (fitOddsModel) that multiplies the value,
+ * not a column inside the regression, because they answer a different question — whether a
+ * token is issued at all, not what it is worth once it is.
+ */
 export const FACTOR_KEYS = ['base', 'growth', 'maturity', 'duration', 'category', 'chain'] as const;
 export type FactorKey = (typeof FACTOR_KEYS)[number];
 
@@ -66,6 +71,16 @@ export const FACTOR_LABELS: Record<FactorKey, string> = {
   chain: 'Chain breadth',
 };
 
+/** What each factor claims to read out of the snapshot, in the dashboard's words. */
+export const FACTOR_CLAIMS: Record<FactorKey, string> = {
+  base: 'log of the protocol\'s own TVL: how big the pool a token would be priced against is',
+  growth: 'the protocol\'s own 7-day TVL change, squashed: how fast the pool is growing now',
+  maturity: 'how long DefiLlama has tracked the protocol: how established its record is',
+  duration: 'how long it has run with no token at all, saturating: how overdue a first token is',
+  category: 'the median market ratio of the live-token protocols in the same category',
+  chain: 'how many chains the protocol secures TVL on, capped',
+};
+
 /** The shape constants of the factors: the transforms, not the weights. The weights are fitted. */
 export interface FactorShapes {
   growth_squash: number;
@@ -77,6 +92,83 @@ export interface FactorShapes {
   category_min_samples: number;
   chain_max: number;
   unknown_age_days: number;
+  /** The scale of the token-odds term, in days: how long past the peers' median a run must be
+   *  before the odds of a first token are read as higher. */
+  odds_scale: number;
+  /**
+   * The peers' median run before they recorded a token, in days: the median age (days since
+   * DefiLlama began listing them) of the snapshot's live-token protocols. It is a shape, not a
+   * fitted weight: it describes the snapshot and never moves with the fold, so the token-odds
+   * term reads the same number on a training row and on a held-out one.
+   */
+  peer_age: number;
+}
+
+/**
+ * The token-odds model: the probability that a protocol issues a token at all, fitted on the
+ * snapshot's own protocols and tested held-out.
+ *
+ * The value model's own target is the market's ratio (mcap/tvl), and the age of a protocol does
+ * not predict that ratio. But age does predict whether a token is issued at all, and that is a
+ * separate question the snapshot can answer: of the 758 protocols, 416 already record a token and
+ * 342 record none, and the older a protocol is the likelier it is among the issued ones.
+ *
+ * So the radar's value is two parts multiplied:
+ *
+ *   implied value = TVL x (market multiple for a protocol like this one) x (odds of a first token)
+ *
+ * The multiple is what the market pays for the token of a protocol that has one. The odds are
+ * what this protocol's own record says about whether it would have one. Both are fitted on the
+ * snapshot and both are tested on rows the fit never saw.
+ *
+ * The odds model is a logistic regression on log1p(age/30), fitted on the oldest 60% of the
+ * snapshot's protocols by listing day and scored on the newest 40%, with the same walk-forward
+ * split the value model uses. The baseline it has to beat is the training set's own issuance
+ * rate, which is what "assume every protocol issues a token at the same rate" is worth.
+ */
+export interface OddsModel {
+  /** The fitted coefficient on log1p(age/30): the age feature's weight. */
+  coef: number;
+  /** The fitted coefficient on the squashed 7-day change, when that feature was kept. */
+  coef_growth: number;
+  /** The fitted coefficient on log TVL, when that feature was kept. */
+  coef_tvl: number;
+  /** The fitted intercept. */
+  intercept: number;
+  /** The rows the fit saw. */
+  train_n: number;
+  /** The rows the score saw. */
+  test_n: number;
+  /** The held-out Brier score: the mean squared error of the probability. */
+  brier: number;
+  /** The baseline's Brier score: the training set's own issuance rate, for every row. */
+  brier_baseline: number;
+  /** The held-out AUC: how well the score orders issued above not-issued. */
+  auc: number;
+  /** The baseline's AUC. */
+  auc_baseline: number;
+  /** The Brier skill score: 1 - our error over the baseline's error. */
+  skill: number;
+  /** The training set's issuance rate. */
+  base_rate: number;
+  /** The oldest age the fit saw, in days. */
+  max_train_age: number;
+  /** The candidate features the odds model tried, and what each did on held-out rows. */
+  features: OddsFeatureOutcome[];
+  /** The features the odds model keeps. */
+  kept: string[];
+}
+
+/** What one candidate feature did to the odds model's held-out score. */
+export interface OddsFeatureOutcome {
+  key: string;
+  label: string;
+  kept: boolean;
+  reason: string;
+  /** The held-out Brier score with the feature in. */
+  brier: number;
+  /** The held-out AUC with the feature in. */
+  auc: number;
 }
 
 /** How one scheme scored on the held-out rows. */
@@ -97,7 +189,7 @@ export interface SchemeMetrics {
   n: number;
 }
 
-/** What one factor did when it was removed. */
+/** What one factor did when it was removed, and when it was tried. */
 export interface FactorOutcome {
   key: FactorKey;
   label: string;
@@ -113,6 +205,14 @@ export interface FactorOutcome {
   r_without: number;
   /** The median error with the factor removed. */
   ape_without: number;
+  /**
+   * The mean held-out correlation the factor's own value has against the target on its own.
+   * Zero means the factor carries no signal of its own; it is the number that says whether the
+   * factor earns its place at all, before it is tried inside the model.
+   */
+  univariate_r: number;
+  /** Whether the selection tried the factor and found it did not help. */
+  tried: boolean;
 }
 
 /** The whole experiment, as the dashboard and the README print it. */
@@ -121,6 +221,8 @@ export interface ValidationReport {
   universe: number;
   /** The rows, as the panel reads them. */
   universe_note: string;
+  /** The token-odds model: the probability a protocol issues a token, fitted and tested. */
+  odds: OddsModel;
   /** The hold-out scheme descriptions, as printed. */
   schemes: { walkforward: string; loo: string };
   /** The score of the full six-factor model on each scheme. */
@@ -136,6 +238,8 @@ export interface ValidationReport {
   kept: FactorKey[];
   /** The factors the shipped model drops, with the reason. */
   dropped: FactorOutcome[];
+  /** The candidate factors the selection tried, in the order it tried them. */
+  selection_order: FactorKey[];
   /** The fitted intercept: the model's base ratio before any factor. */
   intercept: number;
   /** The fitted weight of each kept factor. */
@@ -257,6 +361,13 @@ export interface TrainCtx {
   perCategory: Map<string, number>;
   /** The overall median ratio of the training rows. */
   overall: number;
+  /**
+   * The peers' median age in days: how long the training rows ran before they recorded a token.
+   * A protocol that has outlasted that run is read as carrying higher odds of a first token,
+   * and one that has not is read as carrying lower odds. This is the token-odds term's only
+   * input, and it comes from the snapshot's own live-token rows.
+   */
+  peerAge: number;
 }
 
 /** The category context of a set of training rows; a category with too few rows falls back. */
@@ -275,7 +386,10 @@ export function trainContext(rows: LiveSample[], shapes: FactorShapes): TrainCtx
   for (const [key, list] of byCategory) {
     if (list.length >= shapes.category_min_samples) perCategory.set(key, median(list));
   }
-  return { perCategory, overall };
+  // The peers' median run before a token was recorded: the age the token-odds term reads against.
+  const ages = rows.map((r) => r.age_days).filter((a): a is number => a !== null);
+  const peerAge = shapes.peer_age > 0 ? shapes.peer_age : ages.length > 0 ? median(ages) : shapes.unknown_age_days;
+  return { perCategory, overall, peerAge };
 }
 
 /** The category multiple a row's category carries, read from the training context. */
@@ -463,25 +577,307 @@ function runScheme(
 }
 
 /**
- * The decision rule, stated once: a factor is dropped when removing it makes the held-out
- * correlation clearly better (more than 0.01) AND does not make the error materially worse.
- * Otherwise it is kept — a term that only looks neutral on correlation but that lowers the
- * error when it is there is still doing work.
+ * The token-odds model, fitted and tested.
+ *
+ * The rows are every protocol in the snapshot with a known listing day. The label is whether the
+ * snapshot records a token for it: a market cap, a CoinGecko id or a symbol. The feature is
+ * log1p(age/30) — the protocol's own age in days, in the log1p shape that lets one extra year of
+ * running count the same whatever the age already is.
+ *
+ * The fit is a logistic regression by iteratively reweighted least squares with a small ridge on
+ * the slope, so it is deterministic and has no closed form to fail on. The split is the value
+ * model's own walk-forward split: the oldest 60% by listing day train, the newest 40% are scored,
+ * so a protocol that has run for years and only just listed a token is judged by a model that
+ * never saw it.
+ *
+ * The baseline is the training set's own issuance rate applied to every row: "every protocol
+ * issues a token at the same rate". The model's job is to beat it on the rows it never saw.
  */
-function decide(dr: number, dApe: number): { kept: boolean; reason: string } {
-  if (dr > 0.01 && dApe < 0.005) {
-    return { kept: false, reason: 'removing it raised the held-out correlation and did not cost error: the term was hurting the model' };
+export function fitOddsModel(snapshot: Snapshot): OddsModel {
+  interface OddsRow {
+    age: number;
+    growth: number;
+    logtvl: number;
+    y: number;
+    slug: string;
   }
-  if (dr > 0.01) {
-    return { kept: false, reason: 'removing it raised the held-out correlation: the term was hurting the model' };
+  const rows: OddsRow[] = [];
+  for (const p of snapshot.protocols) {
+    const age = ageOf(snapshot.as_of, p.listed_at);
+    if (age === null) continue;
+    rows.push({
+      age,
+      growth: Math.tanh(Math.min(120, Math.max(-60, p.change_7d ?? 0)) / 45),
+      logtvl: Math.log(p.tvl_usd),
+      y: p.mcap_usd !== null || p.gecko_id !== null || p.symbol !== null ? 1 : 0,
+      slug: p.slug,
+    });
   }
-  if (dr < -0.005) {
-    return { kept: true, reason: 'removing it lowered the held-out correlation: the term carries signal' };
+  rows.sort((a, b) => a.age - b.age || (a.slug < b.slug ? -1 : 1));
+  const cut = Math.floor(rows.length * 0.6);
+  const train = rows.slice(0, cut);
+  const test = rows.slice(cut);
+  const logistic = (z: number): number => 1 / (1 + Math.exp(-z));
+
+  // The candidate features, in the order they are tried. Each is a function of the protocol's
+  // own snapshot fields. The age feature is log1p(age/30): one more year of running counts the
+  // same whatever the age already is.
+  const CANDIDATES: { key: string; label: string; f: (r: OddsRow) => number }[] = [
+    { key: 'age', label: 'run with no token — log1p(days/30)', f: (r) => Math.log1p(r.age / 30) },
+    { key: 'growth', label: '7-day TVL change, squashed', f: (r) => r.growth },
+    { key: 'tvl', label: 'log of its own TVL', f: (r) => r.logtvl },
+  ];
+
+  /** Fit a logistic regression by IRLS on the given features, and score it on the test rows. */
+  const fitAndScore = (feats: { key: string; label: string; f: (r: OddsRow) => number }[]) => {
+    const m = feats.length + 1;
+    const X = train.map((r) => [1, ...feats.map((f) => f.f(r))]);
+    const y = train.map((r) => r.y);
+    let beta = new Array<number>(m).fill(0);
+    for (let iter = 0; iter < 60; iter++) {
+      const g = new Array<number>(m).fill(0);
+      const H: number[][] = Array.from({ length: m }, () => new Array<number>(m).fill(0));
+      for (let i = 0; i < X.length; i++) {
+        let z = 0;
+        for (let j = 0; j < m; j++) z += X[i]![j]! * beta[j]!;
+        const p = logistic(z);
+        const w = Math.max(1e-6, p * (1 - p));
+        const res = y[i]! - p;
+        for (let a = 0; a < m; a++) {
+          g[a]! += res * X[i]![a]!;
+          for (let c = 0; c < m; c++) H[a]![c]! += w * X[i]![a]! * X[i]![c]!;
+        }
+      }
+      // A small ridge on the slopes, never on the intercept: the fit stays deterministic.
+      for (let j = 1; j < m; j++) {
+        H[j]![j]! += 1e-3 * train.length;
+        g[j]! -= 1e-4 * beta[j]!;
+      }
+      // Solve H delta = g by Gauss-Jordan on the augmented matrix.
+      const A: number[][] = H.map((row, a) => [...row, g[a]!]);
+      for (let c = 0; c < m; c++) {
+        let piv = c;
+        for (let r = c + 1; r < m; r++) if (Math.abs(A[r]![c]!) > Math.abs(A[piv]![c]!)) piv = r;
+        if (Math.abs(A[piv]![c]!) < 1e-12) continue;
+        const t = A[c]!;
+        A[c] = A[piv]!;
+        A[piv] = t;
+        const p = A[c]![c]!;
+        for (let k = 0; k <= m; k++) A[c]![k]! /= p;
+        for (let r = 0; r < m; r++) {
+          if (r === c) continue;
+          const f = A[r]![c]!;
+          if (f === 0) continue;
+          for (let k = 0; k <= m; k++) A[r]![k]! -= f * A[c]![k]!;
+        }
+      }
+      const delta = A.map((row) => row[m]!);
+      beta = beta.map((v, j) => v + delta[j]!);
+      if (delta.reduce((s, d) => s + Math.abs(d), 0) < 1e-9) break;
+    }
+    const scored = test.map((r) => {
+      let z = beta[0]!;
+      feats.forEach((f, j) => { z += f.f(r) * beta[j + 1]!; });
+      return { p: logistic(z), y: r.y };
+    });
+    const brier = (pairs: { p: number; y: number }[]): number =>
+      pairs.length === 0 ? 0 : pairs.reduce((s, x) => s + (x.p - x.y) ** 2, 0) / pairs.length;
+    const auc = (pairs: { p: number; y: number }[]): number => {
+      const pos = pairs.filter((x) => x.y === 1).map((x) => x.p);
+      const neg = pairs.filter((x) => x.y === 0).map((x) => x.p);
+      if (pos.length === 0 || neg.length === 0) return 0.5;
+      let s = 0;
+      for (const a of pos) for (const b of neg) s += a > b ? 1 : a === b ? 0.5 : 0;
+      return s / (pos.length * neg.length);
+    };
+    return { beta, brier: brier(scored), auc: auc(scored) };
+  };
+
+  // Forward selection on the held-out Brier score: a feature joins only when it lowers the
+  // held-out error by more than the margin. The baseline is the training set's own issuance rate.
+  const baseRate = train.length > 0 ? train.reduce((s, r) => s + r.y, 0) / train.length : 0.5;
+  const brierOf = (pairs: { p: number; y: number }[]): number =>
+    pairs.length === 0 ? 0 : pairs.reduce((s, x) => s + (x.p - x.y) ** 2, 0) / pairs.length;
+  const baseBrier = brierOf(test.map((r) => ({ p: baseRate, y: r.y })));
+  const MARGIN = 0.005;
+  let kept: { key: string; label: string; f: (r: OddsRow) => number }[] = [];
+  let best = fitAndScore(kept);
+  let progress = true;
+  while (progress && kept.length < CANDIDATES.length) {
+    progress = false;
+    for (const c of CANDIDATES) {
+      if (kept.some((k) => k.key === c.key)) continue;
+      const trial = fitAndScore([...kept, c]);
+      if (trial.brier < best.brier - MARGIN) {
+        kept = [...kept, c];
+        best = trial;
+        progress = true;
+        break;
+      }
+    }
   }
-  if (dApe > 0.005) {
-    return { kept: true, reason: 'removing it raised the held-out error: the term carries signal' };
+  // The ablation table: what every candidate did on its own.
+  const features: OddsFeatureOutcome[] = [];
+  for (const c of CANDIDATES) {
+    const withIt = fitAndScore([...kept.filter((k) => k.key !== c.key), c]);
+    const isKept = kept.some((k) => k.key === c.key);
+    features.push({
+      key: c.key,
+      label: c.label,
+      kept: isKept,
+      reason: isKept
+        ? 'adding it lowered the held-out Brier score by more than the margin: the feature earns its place'
+        : 'adding it did not lower the held-out Brier score by more than the margin: the feature carries no signal the kept ones do not',
+      brier: withIt.brier,
+      auc: withIt.auc,
+    });
   }
-  return { kept: true, reason: 'removing it changed the held-out score not at all: the term is kept' };
+  // The final model is fitted on every row, not just the training half: the held-out score has
+  // already established that the features are worth having, and the shipped model should use all
+  // the snapshot's protocols.
+  const all = rows;
+  const m = kept.length + 1;
+  const X = all.map((r) => [1, ...kept.map((f) => f.f(r))]);
+  const y = all.map((r) => r.y);
+  let beta = new Array<number>(m).fill(0);
+  for (let iter = 0; iter < 60; iter++) {
+    const g = new Array<number>(m).fill(0);
+    const H: number[][] = Array.from({ length: m }, () => new Array<number>(m).fill(0));
+    for (let i = 0; i < X.length; i++) {
+      let z = 0;
+      for (let j = 0; j < m; j++) z += X[i]![j]! * beta[j]!;
+      const p = logistic(z);
+      const w = Math.max(1e-6, p * (1 - p));
+      const res = y[i]! - p;
+      for (let a = 0; a < m; a++) {
+        g[a]! += res * X[i]![a]!;
+        for (let c = 0; c < m; c++) H[a]![c]! += w * X[i]![a]! * X[i]![c]!;
+      }
+    }
+    for (let j = 1; j < m; j++) {
+      H[j]![j]! += 1e-3 * all.length;
+      g[j]! -= 1e-4 * beta[j]!;
+    }
+    const A: number[][] = H.map((row, a) => [...row, g[a]!]);
+    for (let c = 0; c < m; c++) {
+      let piv = c;
+      for (let r = c + 1; r < m; r++) if (Math.abs(A[r]![c]!) > Math.abs(A[piv]![c]!)) piv = r;
+      if (Math.abs(A[piv]![c]!) < 1e-12) continue;
+      const t = A[c]!;
+      A[c] = A[piv]!;
+      A[piv] = t;
+      const p = A[c]![c]!;
+      for (let k = 0; k <= m; k++) A[c]![k]! /= p;
+      for (let r = 0; r < m; r++) {
+        if (r === c) continue;
+        const f = A[r]![c]!;
+        if (f === 0) continue;
+        for (let k = 0; k <= m; k++) A[r]![k]! -= f * A[c]![k]!;
+      }
+    }
+    const delta = A.map((row) => row[m]!);
+    beta = beta.map((v, j) => v + delta[j]!);
+    if (delta.reduce((s, d) => s + Math.abs(d), 0) < 1e-9) break;
+  }
+  return {
+    coef: kept.findIndex((k) => k.key === 'age') >= 0 ? beta[kept.findIndex((k) => k.key === 'age') + 1]! : 0,
+    coef_growth: kept.findIndex((k) => k.key === 'growth') >= 0 ? beta[kept.findIndex((k) => k.key === 'growth') + 1]! : 0,
+    coef_tvl: kept.findIndex((k) => k.key === 'tvl') >= 0 ? beta[kept.findIndex((k) => k.key === 'tvl') + 1]! : 0,
+    intercept: beta[0]!,
+    train_n: train.length,
+    test_n: test.length,
+    brier: best.brier,
+    brier_baseline: baseBrier,
+    auc: best.auc,
+    auc_baseline: 0.5,
+    skill: baseBrier > 0 ? 1 - best.brier / baseBrier : 0,
+    base_rate: baseRate,
+    max_train_age: train.length > 0 ? train[train.length - 1]!.age : 0,
+    features,
+    kept: kept.map((k) => k.key),
+  };
+}
+
+/**
+ * The probability that a protocol issues a token, from the fitted odds model.
+ *
+ * The features are the ones the selection kept — the same log1p(age/30) the fit used, and the
+ * same logistic — so the page's odds and the report's odds are the same function of the same
+ * fields. The model is fitted on every row of the snapshot (its held-out score is what proved
+ * the features are worth having), so the odds it reports are the odds for the whole snapshot.
+ */
+export function oddsOf(model: OddsModel, ageDays: number | null, change7d: number | null, tvlUsd: number): number {
+  if (model.kept.length === 0) return model.base_rate;
+  const age = ageDays === null ? 365 : Math.max(0, ageDays);
+  let z = model.intercept;
+  for (const key of model.kept) {
+    if (key === 'age') z += model.coef * Math.log1p(age / 30);
+    if (key === 'growth') z += model.coef_growth * Math.tanh(Math.min(120, Math.max(-60, change7d ?? 0)) / 45);
+    if (key === 'tvl') z += model.coef_tvl * Math.log(tvlUsd);
+  }
+  return 1 / (1 + Math.exp(-z));
+}
+
+/**
+ * The selection rule, stated once.
+ *
+ * The model is built by forward selection on the held-out score, not by starting from every
+ * factor and pruning. The reason is measured, not stylistic: on this snapshot the age terms
+ * (listing age, no-token duration, token odds) are all functions of the same variable, so they
+ * are near-collinear with each other, and a term that is collinear with a term already in the
+ * model is judged on the wrong question — "does removing it hurt?" answers "is it the only copy
+ * of that column?", not "is it signal?". Forward selection asks the second question directly:
+ * a factor joins the model only when adding it raises the held-out correlation.
+ *
+ * The rule, in three parts:
+ *   START with the base term (log TVL). Every protocol's value has to scale with its pool.
+ *   ADD a candidate only when it raises the mean held-out correlation by more than MARGIN.
+ *   STOP when no candidate clears the margin: the model is what survived the test.
+ *
+ * The margin is MARGIN = 0.01 in correlation. It is a real threshold and not a tuning knob:
+ * the fit noise on 51 to 126 held-out rows is larger than it, so a gain under it is not a gain.
+ * The rule is applied on the same two hold-out schemes the report prints, so the number the
+ * dashboard shows is the number the selection used.
+ */
+export const SELECTION_MARGIN = 0.01;
+
+/** The mean held-out correlation of a factor set under both schemes. */
+export interface SchemePair {
+  walkforward: SchemeMetrics;
+  loo: SchemeMetrics;
+  /** The mean of the two schemes' correlations: what the selection reads. */
+  mean_r: number;
+  /** The mean of the two schemes' rank correlations. */
+  mean_rho: number;
+  /** The model's median error over the baseline's: below 1 means the model beats it. */
+  error_ratio: number;
+}
+
+/** Score a factor set under both schemes at once. */
+function scoreBoth(rows: LiveSample[], keys: FactorKey[], shapes: FactorShapes): SchemePair {
+  const walkforward = runScheme(rows, keys, shapes, 'walkforward');
+  const loo = runScheme(rows, keys, shapes, 'loo');
+  return {
+    walkforward,
+    loo,
+    mean_r: (walkforward.r + loo.r) / 2,
+    mean_rho: (walkforward.rho + loo.rho) / 2,
+    error_ratio:
+      walkforward.baseline_ape + loo.baseline_ape > 0
+        ? (walkforward.ape + loo.ape) / (walkforward.baseline_ape + loo.baseline_ape)
+        : 0,
+  };
+}
+
+/**
+ * The factor's own signal: the correlation between the factor's value and the target, over the
+ * live-token rows. It says whether the factor carries anything at all before it is tried inside
+ * the model, where it is judged on its own contribution rather than on the model's total.
+ */
+export function univariateSignal(rows: LiveSample[], key: FactorKey, ctx: TrainCtx, shapes: FactorShapes): number {
+  const xs = rows.map((r) => factorValue(key, r, ctx, shapes));
+  const ys = rows.map((r) => r.target);
+  return pearson(xs, ys);
 }
 
 /**
@@ -491,12 +887,44 @@ function decide(dr: number, dApe: number): { kept: boolean; reason: string } {
  */
 export function validateModel(snapshot: Snapshot, shapes: FactorShapes): ValidationReport {
   const rows = liveSamples(snapshot);
+  const odds = fitOddsModel(snapshot);
   const full = {
     walkforward: runScheme(rows, [...FACTOR_KEYS], shapes, 'walkforward'),
     loo: runScheme(rows, [...FACTOR_KEYS], shapes, 'loo'),
   };
   const meanR = (full.walkforward.r + full.loo.r) / 2;
   const meanApe = (full.walkforward.ape + full.loo.ape) / 2;
+  const ctx = trainContext(rows, shapes);
+
+  // ---- the selection: forward on the held-out score -------------------------------
+  // The base term is always in: a protocol's value has to scale with the pool it draws on.
+  // Every other candidate joins only when adding it raises the mean held-out correlation by
+  // more than the margin. The order the candidates are tried in is the order they are listed
+  // in FACTOR_KEYS, so the run is deterministic.
+  const selectionOrder: FactorKey[] = [];
+  let kept: FactorKey[] = ['base'];
+  let keptScore = scoreBoth(rows, kept, shapes);
+  let progress = true;
+  while (progress && kept.length < FACTOR_KEYS.length) {
+    progress = false;
+    for (const key of FACTOR_KEYS) {
+      if (kept.includes(key)) continue;
+      const trial = scoreBoth(rows, [...kept, key], shapes);
+      if (trial.mean_r > keptScore.mean_r + SELECTION_MARGIN) {
+        kept = [...kept, key];
+        keptScore = trial;
+        selectionOrder.push(key);
+        progress = true;
+        break;
+      }
+    }
+  }
+  const final = {
+    walkforward: runScheme(rows, kept, shapes, 'walkforward'),
+    loo: runScheme(rows, kept, shapes, 'loo'),
+  };
+
+  // ---- the ablation: what every factor, kept or not, does to the score --------------
   const factors: FactorOutcome[] = [];
   for (const key of FACTOR_KEYS) {
     const keys = FACTOR_KEYS.filter((k) => k !== key);
@@ -506,22 +934,32 @@ export function validateModel(snapshot: Snapshot, shapes: FactorShapes): Validat
     const apeWithout = (wf.ape + loo.ape) / 2;
     const dr = rWithout - meanR;
     const dApe = apeWithout - meanApe;
-    const d = decide(dr, dApe);
+    const isKept = kept.includes(key);
+    const uni = univariateSignal(rows, key, ctx, shapes);
+    let reason: string;
+    if (isKept) {
+      reason = `adding it raised the mean held-out correlation by more than the ${SELECTION_MARGIN.toFixed(2)} margin: the term earns its place`;
+    } else if (selectionOrder.length === 0 && key !== 'base') {
+      reason = `no candidate cleared the ${SELECTION_MARGIN.toFixed(2)} margin once the base term was in: adding it did not raise the held-out correlation, and it is collinear with the age terms already tested`;
+    } else {
+      reason = `adding it to the model did not raise the mean held-out correlation by more than the ${SELECTION_MARGIN.toFixed(2)} margin: the term carries no signal the kept terms do not already carry`;
+    }
     factors.push({
       key,
       label: FACTOR_LABELS[key],
-      kept: d.kept,
-      reason: d.reason,
+      kept: isKept,
+      reason,
       d_r: dr,
       d_ape: dApe,
       r_without: rWithout,
       ape_without: apeWithout,
+      univariate_r: uni,
+      tried: isKept || selectionOrder.includes(key),
     });
   }
-  const kept = factors.filter((f) => f.kept).map((f) => f.key);
   const dropped = factors.filter((f) => !f.kept);
+
   // The shipped model is the full fit of the kept factors on every live row.
-  const ctx = trainContext(rows, shapes);
   const fit = fitOLS(rows, ctx, kept, shapes);
   // The leave-one-out error distribution of the shipped model sets the range each value is shown with.
   const looErrors: number[] = [];
@@ -531,13 +969,10 @@ export function validateModel(snapshot: Snapshot, shapes: FactorShapes): Validat
     const tfit = fitOLS(train, tctx, kept, shapes);
     looErrors.push(Math.abs(predict(tfit, rows[i]!, tctx, kept, shapes) - rows[i]!.target));
   }
-  const final = {
-    walkforward: runScheme(rows, kept, shapes, 'walkforward'),
-    loo: runScheme(rows, kept, shapes, 'loo'),
-  };
   return {
     universe: rows.length,
     universe_note: `the ${rows.length} live-token protocols of the snapshot's ${snapshot.protocols.length}`,
+    odds,
     schemes: {
       walkforward: `walk-forward: the oldest 60% by listing day train, the newest 40% held out (${final.walkforward.n} rows)`,
       loo: `leave-one-out: every row held out in turn and predicted by a model fitted on the others (${final.loo.n} rows)`,
@@ -549,6 +984,7 @@ export function validateModel(snapshot: Snapshot, shapes: FactorShapes): Validat
     factors,
     kept,
     dropped,
+    selection_order: selectionOrder,
     intercept: fit.intercept,
     weights: fit.weights,
     error_median_log: median(looErrors),

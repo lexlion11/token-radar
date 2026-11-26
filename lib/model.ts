@@ -27,6 +27,7 @@ import {
   validateModel,
   factorContributions,
   liveSamples,
+  oddsOf,
   trainContext,
   type FactorKey,
   type FactorShapes,
@@ -68,10 +69,33 @@ export const SHAPES: FactorShapes = {
   category_min_samples: 3,
   chain_max: 8,
   unknown_age_days: 365,
+  odds_scale: 240,
+  peer_age: 1000,
 };
 
+/**
+ * The shapes, with the one shape that depends on the snapshot computed from the snapshot: the
+ * peers' median run before they recorded a token. It is the median age (days since DefiLlama
+ * began listing) of the snapshot's live-token protocols — the ones whose token already trades,
+ * so their own run before the token is the peers' record. It is fixed for the whole experiment,
+ * so a training row and a held-out row are read against the same number.
+ */
+export function shapesFor(snapshot: Snapshot): FactorShapes {
+  const ages: number[] = [];
+  for (const p of snapshot.protocols) {
+    if (p.mcap_usd === null) continue;
+    const age = ageDays(snapshot.as_of, p.listed_at);
+    if (age !== null) ages.push(age);
+  }
+  if (ages.length === 0) return SHAPES;
+  const sorted = [...ages].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const peer = sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
+  return { ...SHAPES, peer_age: peer };
+}
+
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-7';
+export const MODEL_VERSION = 'radar-8';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -138,6 +162,10 @@ export interface BoardRow {
     log_ratio: number;
     /** The model's implied value per dollar of the protocol's TVL. */
     implied_multiple: number;
+    /** The market multiple alone: what the market pays for the token of a protocol like this. */
+    market_multiple: number;
+    /** The fitted probability that this protocol issues a token at all. */
+    token_odds: number;
     /** Each kept factor's value, weight and contribution to the log ratio. */
     factors: { key: FactorKey; label: string; value: number; weight: number; contribution: number }[];
   };
@@ -174,6 +202,8 @@ export interface RadarRow {
   farm_value_per_hour: number;
   log_ratio: number;
   implied_multiple: number;
+  market_multiple: number;
+  token_odds: number;
   factors: { key: FactorKey; label: string; value: number; weight: number; contribution: number }[];
   farm_steps: string[];
   farm_summary: string;
@@ -188,6 +218,48 @@ export interface LiveRow {
   tvl_usd: number;
   mcap_usd: number | null;
   change_7d: number | null;
+}
+
+/** One bucket of the protocol accounting: a count of the snapshot's protocols and why. */
+export interface AccountingBucket {
+  /** The bucket's own key: what the count means. */
+  key: string;
+  /** What a reader is told about the bucket, in full. */
+  label: string;
+  /** The same bucket in the short form the strip prints. */
+  short: string;
+  /** How many of the snapshot's protocols fall in it. */
+  count: number;
+  /** Whether the bucket's protocols are ranked on the board. */
+  ranked: boolean;
+  /** The reason, when the bucket is an exclusion: the house's own style of reason. */
+  reason: ExclusionReason | null;
+  /** One example from the bucket, so a reader can see what it holds. */
+  example: string | null;
+}
+
+/** The whole protocol accounting: every one of the snapshot's protocols, counted once. */
+export interface ProtocolAccounting {
+  /** The snapshot's protocol count: the total every bucket must sum to. */
+  total: number;
+  /** The buckets, in the order the dashboard prints them. */
+  buckets: AccountingBucket[];
+  /** The number of protocols the board ranks. */
+  ranked: number;
+  /** The number of protocols whose token already has a market cap: it already trades. */
+  trading: number;
+  /** The number of protocols that already record a token but carry no market cap yet. */
+  token_recorded: number;
+  /** The number of protocols left out, and why, by reason. */
+  excluded: number;
+  /** The number of protocols left out, by reason. */
+  excluded_by_reason: { reason: ExclusionReason; label: string; count: number }[];
+  /** How many of the ranked rows are on the snapshot's watchlist. */
+  watchlist_ranked: number;
+  /** How many of the ranked rows are below the watchlist's floor. */
+  early_ranked: number;
+  /** How many of the snapshot's protocols fall below the watchlist's floor. */
+  below_floor: number;
 }
 
 /** Everything the dashboard needs: the board, the live set, the model it runs and its validation. */
@@ -206,6 +278,8 @@ export interface RadarData {
   range_error_log: number;
   /** The whole validation experiment, as the model panel prints it. */
   validation: ValidationReport;
+  /** Every one of the snapshot's protocols, counted once, by what the board does with it. */
+  accounting: ProtocolAccounting;
   watchlist_size: number;
   board_size: number;
   early_size: number;
@@ -245,17 +319,15 @@ export function isPreToken(p: SnapshotProtocol): boolean {
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
 /** Categories whose protocols are wrapped, staked or bridged products of tokens that already trade. */
-const PRODUCT_CATEGORIES = new Set([
-  'Bridge',
-  'Canonical Bridge',
-  'Cross Chain Bridge',
+const BRIDGE_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Cross Chain Bridge']);
+const QUASI_STAKING_CATEGORIES = new Set([
   'Liquid Staking',
   'Liquid Restaking',
   'Restaked BTC',
   'Anchor BTC',
   'Decentralized BTC',
-  'CEX',
 ]);
+const EXCHANGE_CATEGORIES = new Set(['CEX']);
 
 /** A name carrying one of these whole words names a product of a token that trades, not a protocol of its own. */
 const PRODUCT_WORD = /\b(wrapped|staked|staking)\b/i;
@@ -273,11 +345,35 @@ const EXCHANGE_PREFIXES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', '
  * exactly the kind of early row the radar exists to find.
  */
 export function isStandalone(p: SnapshotProtocol): boolean {
-  if (p.category !== null && PRODUCT_CATEGORIES.has(p.category)) return false;
-  if (VERSIONED.test(p.name)) return false;
-  if (PRODUCT_WORD.test(p.name)) return false;
-  for (const e of EXCHANGE_PREFIXES) if (p.name.startsWith(e)) return false;
-  return true;
+  return productReason(p) === null;
+}
+
+/**
+ * Why a protocol that records no token is not ranked, in the house's own style: the reason its
+ * record does not stand on its own but is a product of something whose token already trades.
+ * The reason is one of five, and it is read from the snapshot's own fields — the category, the
+ * name — never from a table of protocol names:
+ *
+ *   exchange        the category is an exchange's, or the name begins with an exchange's
+ *   bridge          the category is a bridge: it holds a token that trades on the other side
+ *   quasi-staking   the category is a staked or restaked product: its receipt is the token
+ *   versioned       the name ends in a release marker: it is a pool of another protocol
+ *   wrapped-or-staked  the name carries a whole word wrapped, staked or staking
+ *
+ * The dashboard's protocol accounting uses these same five reasons, so the accounting and the
+ * board can never disagree about which protocols were left out.
+ */
+export type ExclusionReason = 'exchange' | 'bridge' | 'quasi-staking' | 'versioned' | 'wrapped-or-staked';
+
+export function productReason(p: SnapshotProtocol): ExclusionReason | null {
+  const cat = p.category ?? '';
+  if (EXCHANGE_CATEGORIES.has(cat)) return 'exchange';
+  if (BRIDGE_CATEGORIES.has(cat)) return 'bridge';
+  if (QUASI_STAKING_CATEGORIES.has(cat)) return 'quasi-staking';
+  if (VERSIONED.test(p.name)) return 'versioned';
+  if (PRODUCT_WORD.test(p.name)) return 'wrapped-or-staked';
+  for (const e of EXCHANGE_PREFIXES) if (p.name.startsWith(e)) return 'exchange';
+  return null;
 }
 
 /**
@@ -582,6 +678,136 @@ function fmtShort(usd: number): string {
   return String(Math.round(usd));
 }
 
+/**
+ * The protocol accounting: every one of the snapshot's protocols counted exactly once, by what
+ * the board does with it.
+ *
+ * The buckets are, in order:
+ *   ranked, at or above the floor  the board's rows, of which the watchlist's own 40 are a part
+ *   ranked, below the floor        the early radar: no token, and a smaller pool than the floor
+ *   already trading                the snapshot's protocols whose token already has a market cap
+ *   excluded, bridge               a bridge: it holds a token that trades on the other side
+ *   excluded, quasi-staking        a staked or restaked product: its receipt is the token
+ *   excluded, exchange             an exchange's own book, not a protocol with a token to come
+ *   excluded, versioned            a pool of another protocol: the name ends in a release marker
+ *   excluded, wrapped-or-staked    the name carries a whole word wrapped, staked or staking
+ *
+ * Every count comes from the snapshot's own fields: the market cap, the gecko id and the symbol
+ * decide whether a token already trades; the category and the name decide the exclusion reason.
+ * The buckets sum to the snapshot's protocol count with no remainder, and the dashboard says so.
+ */
+export function protocolAccounting(snapshot: Snapshot, board: BoardRow[]): ProtocolAccounting {
+  const rankedSlugs = new Set(board.map((r) => r.slug));
+  const isWatch = new Set(snapshot.watchlist);
+  const counts = new Map<string, { count: number; example: string | null }>();
+  const bump = (key: string, example: string): void => {
+    const e = counts.get(key);
+    if (e === undefined) counts.set(key, { count: 1, example });
+    else {
+      e.count += 1;
+      if (e.example === null) e.example = example;
+    }
+  };
+  let trading = 0;
+  let noMcap = 0;
+  let excluded = 0;
+  const reasonCounts = new Map<ExclusionReason, number>();
+  for (const p of snapshot.protocols) {
+    if (!isPreToken(p)) {
+      // The snapshot records the protocol's token: a gecko id or a symbol on record.
+      // A market cap means the token already has a price; without one the token is recorded
+      // but the market has not priced it yet. The board ranks neither: a token that exists is
+      // not a launch to farm.
+      if (p.mcap_usd !== null) {
+        trading += 1;
+        bump('trading', `${p.name} (${p.slug})`);
+      } else {
+        noMcap += 1;
+        bump('token-recorded', `${p.name} (${p.slug})`);
+      }
+      continue;
+    }
+    const reason = productReason(p);
+    if (reason === null) {
+      const key = p.tvl_usd >= snapshot.floor_usd ? 'ranked-floor' : 'ranked-early';
+      bump(key, `${p.name} (${p.slug})`);
+      continue;
+    }
+    excluded += 1;
+    reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+    bump('excluded-' + reason, `${p.name} (${p.slug})`);
+  }
+  const watchlistRanked = snapshot.watchlist.filter((s) => rankedSlugs.has(s)).length;
+  const earlyRanked = board.length - watchlistRanked;
+  const belowFloor = counts.get('ranked-early')?.count ?? 0;
+  const REASONS: { reason: ExclusionReason; label: string }[] = [
+    { reason: 'bridge', label: 'bridge — holds a token that trades on the other side' },
+    { reason: 'quasi-staking', label: 'quasi-staking — a staked or restaked product; its receipt is the token' },
+    { reason: 'exchange', label: 'exchange — an exchange\'s own book, not a protocol with a token to come' },
+    { reason: 'versioned', label: 'versioned — a pool of another protocol; the name ends in a release marker' },
+    { reason: 'wrapped-or-staked', label: 'wrapped or staked — the name carries a whole word wrapped, staked or staking' },
+  ];
+  const buckets: AccountingBucket[] = [
+    {
+      key: 'ranked-floor',
+      label: 'ranked — no token, at or above the watchlist floor',
+      short: 'ranked, above the floor',
+      count: counts.get('ranked-floor')?.count ?? 0,
+      ranked: true,
+      reason: null,
+      example: counts.get('ranked-floor')?.example ?? null,
+    },
+    {
+      key: 'ranked-early',
+      label: 'ranked — no token, below the watchlist floor (the early radar)',
+      short: 'ranked, below the floor',
+      count: counts.get('ranked-early')?.count ?? 0,
+      ranked: true,
+      reason: null,
+      example: counts.get('ranked-early')?.example ?? null,
+    },
+    {
+      key: 'trading',
+      label: 'already trading — the snapshot records a market cap for its token; shown apart, never ranked',
+      short: 'already trading',
+      count: counts.get('trading')?.count ?? 0,
+      ranked: false,
+      reason: null,
+      example: counts.get('trading')?.example ?? null,
+    },
+    {
+      key: 'token-recorded',
+      label: 'token already recorded — a gecko id or a symbol on record, but no market cap yet',
+      short: 'token recorded, no cap',
+      count: counts.get('token-recorded')?.count ?? 0,
+      ranked: false,
+      reason: null,
+      example: counts.get('token-recorded')?.example ?? null,
+    },
+    ...REASONS.map((r) => ({
+      key: 'excluded-' + r.reason,
+      label: 'excluded — ' + r.label,
+      short: 'excluded: ' + r.reason,
+      count: counts.get('excluded-' + r.reason)?.count ?? 0,
+      ranked: false,
+      reason: r.reason,
+      example: counts.get('excluded-' + r.reason)?.example ?? null,
+    })),
+  ];
+  return {
+    total: snapshot.protocols.length,
+    buckets,
+    ranked: board.length,
+    trading,
+    token_recorded: noMcap,
+    excluded,
+    excluded_by_reason: REASONS.map((r) => ({ reason: r.reason, label: r.label, count: reasonCounts.get(r.reason) ?? 0 })),
+    watchlist_ranked: watchlistRanked,
+    early_ranked: earlyRanked,
+    below_floor: belowFloor,
+  };
+}
+
 /** The board's own rows: every watchlist slug, plus every other standalone pre-token protocol. */
 export function buildBoard(
   snapshot: Snapshot,
@@ -612,7 +838,7 @@ export function buildBoard(
   const rows: BoardRow[] = [];
   for (const p of chosen.values()) {
     const age = ageDays(snapshot.as_of, p.listed_at);
-    const contributions = factorContributions(fit, kept, SHAPES, ctx, {
+    const contributions = factorContributions(fit, kept, report.shapes, ctx, {
       tvl_usd: p.tvl_usd,
       change_7d: p.change_7d,
       age_days: age,
@@ -620,7 +846,14 @@ export function buildBoard(
       category: p.category,
     });
     const logRatio = contributions.log_ratio;
-    const implied = Math.max(1, Math.round(p.tvl_usd * Math.exp(logRatio)));
+    // The value has two parts multiplied:
+    //   the market multiple: what the market pays for the token of a protocol like this one
+    //   the token odds: the probability this protocol issues a token at all, from its own age
+    // The multiple is the fitted model's exp(log ratio); the odds come from the fitted odds
+    // model. Both are fitted on the snapshot and both are tested held-out.
+    const marketMultiple = Math.exp(logRatio);
+    const odds = oddsOf(report.odds, age, p.change_7d, p.tvl_usd);
+    const implied = Math.max(1, Math.round(p.tvl_usd * marketMultiple * odds));
     const plan = farmPlan(p, age);
     const multiple = p.tvl_usd > 0 ? implied / p.tvl_usd : 0;
     // The rate a farmer's hour earns: the modelled token's value per hour of active labour.
@@ -656,6 +889,8 @@ export function buildBoard(
       model: {
         log_ratio: Math.round(logRatio * 1e4) / 1e4,
         implied_multiple: Math.round(multiple * 1e4) / 1e4,
+        market_multiple: Math.round(marketMultiple * 1e4) / 1e4,
+        token_odds: Math.round(odds * 1e4) / 1e4,
         factors: contributions.factors.map((f) => ({
           key: f.key,
           label: f.label,
@@ -744,6 +979,8 @@ export function radarRow(row: BoardRow): RadarRow {
     farm_value_per_hour: row.farm_value_per_hour,
     log_ratio: row.model.log_ratio,
     implied_multiple: row.model.implied_multiple,
+    market_multiple: row.model.market_multiple,
+    token_odds: row.model.token_odds,
     factors: row.model.factors,
     farm_steps: row.farm_steps,
     farm_summary: row.farm_summary,
@@ -752,22 +989,25 @@ export function radarRow(row: BoardRow): RadarRow {
 
 /** Everything the dashboard renders, from the snapshot and the validation report. */
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData; report: ValidationReport } {
-  const report = validateModel(snapshot, SHAPES);
-  const ctx = trainContext(liveSamples(snapshot), SHAPES);
+  const shapes = shapesFor(snapshot);
+  const report = validateModel(snapshot, shapes);
+  const ctx = trainContext(liveSamples(snapshot), shapes);
   const board = buildBoard(snapshot, report, ctx);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !r.watchlist).length;
+  const accounting = protocolAccounting(snapshot, board);
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
     floor_usd: snapshot.floor_usd,
     model_version: MODEL_VERSION,
-    shapes: SHAPES,
+    shapes,
     kept: report.kept,
     weights: report.weights,
     intercept: report.intercept,
     range_error_log: report.error_median_log,
     validation: report,
+    accounting,
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: early,

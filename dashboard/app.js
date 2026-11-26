@@ -1,9 +1,9 @@
-// Token Radar dashboard controller, radar-7: reads window.RADAR (the board, written beside this
+// Token Radar dashboard controller, radar-8: reads window.RADAR (the board, written beside this
 // page as data.js by main.ts) and window.INTEGRITY (the integrity strip, written beside it as
-// integrity.js), and renders the ranked board with an integrity strip, a spotlight rail, filters
-// with chips, a per-protocol detail view with the value's derivation and the costed farm
-// verdict, the live-token strip, the fitted-and-tested model panel, keyboard navigation and CSV
-// export. No framework, no network, one hash router.
+// integrity.js), and renders the ranked board with the protocol accounting, the fitted-and-tested
+// value model, an integrity strip, a spotlight rail, filters with chips, a per-protocol detail view
+// with the value's derivation and the costed farm verdict, the live-token strip, the full
+// validation panel, keyboard navigation and CSV export. No framework, no network, one hash router.
 (function () {
   'use strict';
   var R = window.RADAR;
@@ -11,6 +11,7 @@
   var G = window.INTEGRITY || {};
 
   var V = R.validation;
+  var O = V.odds || {};
   var FC = { base: '#8fa3b8', growth: '#4ade80', maturity: '#67e8f9', duration: '#c4b5fd', category: '#fbbf24', chain: '#60a5fa' };
   // The factor palette, keyed by the factor key the model reports.
   var FK = ['base', 'growth', 'maturity', 'duration', 'category', 'chain'];
@@ -26,7 +27,7 @@
     if (usd >= 1e12) return '$' + (usd / 1e12).toFixed(2) + 'T';
     if (usd >= 1e9) return '$' + (usd / 1e9).toFixed(2) + 'B';
     if (usd >= 1e6) return '$' + (usd / 1e6).toFixed(1) + 'M';
-    if (usd >= 1e3) return '$' + (usd / 1e3).toFixed(0) + 'K';
+    if (usd >= 1e3) return '$' + Math.round(usd / 1e3) + 'K';
     return '$' + usd;
   };
   var fmtPct = function (p) { return p == null ? '—' : (p > 0 ? '+' : '') + p.toFixed(1) + '%'; };
@@ -40,6 +41,7 @@
     return 'hsl(' + h + ',42%,52%)';
   }
   var sgn = function (v, d) { var s = v.toFixed(d === undefined ? 4 : d); return v >= 0 ? '+' + s : s; };
+  var pc1 = function (x) { return (x * 100).toFixed(1) + '%'; };
 
   // ---------- header + integrity strip + stats ----------
   $('asof').textContent = R.as_of;
@@ -49,10 +51,59 @@
     ['SHA256', (G.snapshot_sha256 || '').slice(0, 16)],
     ['WATCHLIST', (G.watchlist_covered || 0) + '/' + (G.snapshot_watchlist || 0) + ' covered'],
     ['ROWS', (G.board_rows || 0) + ' (' + (G.board_early_rows || 0) + ' below the floor)'],
+    ['ACCOUNTED', (G.accounting_sum || 0) + '/' + (G.accounting_total || 0) + ' protocols'],
     ['BOARD.JSON', (G.board_sha256 || '').slice(0, 16)],
     ['DATA.JS', (G.data_sha256 || '').slice(0, 16)],
   ].map(function (x) { return '<span><span class="k">' + x[0] + '</span> <b>' + esc(x[1]) + '</b></span>'; }).join('') +
     '<span class="ok">screenshots rendered headless from this exact data.js</span>';
+
+  // ---------- protocol accounting ----------
+  // Every protocol in the snapshot, counted once, by what the board does with it. The counts come
+  // from the snapshot's own fields and sum to its protocol count with no remainder.
+  function renderAccounting() {
+    var A = R.accounting;
+    if (!A) return;
+    $('acctbody').innerHTML = A.buckets.map(function (b) {
+      var cls = b.ranked ? 'ok' : (b.key === 'trading' ? 'traded' : 'out');
+      return '<div class="abucket ' + cls + '" title="' + esc(b.label + (b.example ? ' — e.g. ' + b.example : '')) + '">' +
+        '<span class="an">' + b.count + '</span>' +
+        '<span class="al">' + esc(b.short) + '</span>' +
+        '</div>';
+    }).join('');
+    var sum = A.buckets.reduce(function (n, b) { return n + b.count; }, 0);
+    $('acctfoot').innerHTML =
+      '<b>' + sum + ' of ' + A.total + ' protocols accounted for, no remainder.</b> ' +
+      A.ranked + ' are ranked (of which ' + A.watchlist_ranked + ' are the watchlist\'s own ' + R.watchlist_size + ' and ' + A.early_ranked + ' are below its $' + (R.floor_usd / 1e6) + 'M floor), ' +
+      A.trading + ' already trade at a market price and are shown apart, ' + A.token_recorded + ' already record a token but carry no market cap, and ' + A.excluded + ' are left out — ' +
+      A.excluded_by_reason.map(function (r) { return r.count + ' ' + r.reason; }).join(', ') +
+      '. Every count is read from the snapshot\'s own market cap, gecko id, symbol, category and name.';
+  }
+
+  // ---------- the value model, on the default view ----------
+  function renderModelCard() {
+    var wf = V.final.walkforward, loo = V.final.loo;
+    var kept = R.kept || [];
+    var cells = [
+      ['THE EQUATION', 'implied value = TVL × market multiple × token odds'],
+      ['FITTED ON', V.universe + ' live-token protocols'],
+      ['WALK-FORWARD', 'r = ' + wf.r.toFixed(3) + ', rank r = ' + wf.rho.toFixed(3) + ', error ' + pc1(wf.ape) + ' vs baseline ' + pc1(wf.baseline_ape)],
+      ['LEAVE-ONE-OUT', 'r = ' + loo.r.toFixed(3) + ', rank r = ' + loo.rho.toFixed(3) + ', error ' + pc1(loo.ape) + ' vs baseline ' + pc1(loo.baseline_ape)],
+      ['TOKEN ODDS', 'AUC ' + (O.auc || 0).toFixed(3) + ' vs 0.500 baseline, Brier skill ' + pc1(O.skill || 0)],
+      ['TERMS KEPT', kept.length ? kept.join(', ') : 'none'],
+    ];
+    $('modelhead').innerHTML = cells.map(function (c) {
+      return '<div class="mc"><span class="k">' + esc(c[0]) + '</span><span class="v">' + esc(c[1]) + '</span></div>';
+    }).join('');
+    var coefBits = kept.map(function (k) {
+      return FL[k] + ' ' + sgn(R.weights[k] || 0, 3);
+    }).join(' · ');
+    $('modelnote').innerHTML =
+      'The multiple and the odds are both <b>fitted on this snapshot and tested held-out</b>: ' +
+      'the multiple is fitted on the ' + V.universe + ' protocols whose token already trades (the market\'s own answer is known) and tested on rows it never saw, twice; ' +
+      'the odds are fitted on the snapshot\'s own issuance record and tested on the newest 40% of it. ' +
+      'Terms kept: ' + esc(coefBits || 'none') + '. ' +
+      'Every value below is that product, with a range taken from the model\'s own held-out error.';
+  }
 
   var stats = [
     ['WATCHLIST', R.watchlist_size, 'g'], ['EARLY RADAR', R.early_size, 'a'],
@@ -169,16 +220,18 @@
     return Math.max(0, Math.min(1, Math.abs(f.value) / span));
   }
 
-  /** One row's factor bar: a colored segment per kept factor, its width that factor's strength
-   *  against the board's own range, with a floor so thin segments stay visible. */
+  /** One row's derivation bar: a colored segment per kept factor, and the token odds' own share
+   *  of the row's value, so a reader sees WHY the row is ranked where it is. */
   function factorMix(r) {
     var fs = r.factors || [];
-    if (!fs.length) return '<span class="fseg mini"></span>';
-    var segs = fs.map(function (f) {
+    var parts = fs.map(function (f) {
       var v = factorShare(f);
       return '<i style="width:' + Math.max(4, v * 100).toFixed(0) + '%;background:' + FC[f.key] + '" data-l="' + esc(f.label + ': ' + (v * 100).toFixed(0) + '% of the board range') + '"></i>';
     });
-    return '<span class="fseg mini" title="how the implied value is derived — each segment is a kept factor\'s strength against the board\'s own range">' + segs.join('') + '</span>';
+    // The token-odds half of the value, drawn as a distinct segment.
+    var odds = r.token_odds || 0;
+    parts.push('<i style="width:' + Math.max(4, Math.round(odds * 100)).toFixed(0) + '%;background:var(--green)" data-l="' + esc('token odds ' + pc1(odds) + ' — the probability it issues a token') + '"></i>');
+    return '<span class="fseg mini" title="how the implied value is derived — each segment is a kept term\'s strength, and the last is the token odds">' + parts.join('') + '</span>';
   }
 
   function renderTable() {
@@ -191,7 +244,6 @@
       th.innerHTML = th.textContent.replace(/[▲▼]/g, '').trim() + ' ' + dir;
     });
     var html = rows.map(function (r, i) {
-      var ch = r.chains.length > 2 ? r.chains.slice(0, 2).join(', ') + ' +' + (r.chains.length - 2) : r.chains.join(', ');
       var cc = catColor(r.category);
       var bar = Math.max(3, Math.round((r.implied_value_usd / maxImplied) * 88));
       var dot = r.watchlist ? '<span class="wl-dot" title="on the watchlist"></span>' : '';
@@ -201,9 +253,9 @@
         '<td class="rank num">' + r.rank + '</td>' +
         '<td class="name">' + dot + esc(r.name) + '<span class="slug">' + esc(r.slug) + '</span></td>' +
         '<td>' + (r.category ? '<span class="tag" style="border-color:' + cc + ';color:' + cc + '">' + esc(r.category) + '</span>' : '—') + '</td>' +
-        '<td class="chips-cell">' + esc(ch) + '</td>' +
         '<td class="num">' + fmtM(r.tvl_usd) + '</td>' +
         '<td class="num ' + cls(r.change_7d) + '">' + fmtPct(r.change_7d) + '</td>' +
+        '<td class="num odds">' + pc1(r.token_odds || 0) + '</td>' +
         '<td class="mix">' + factorMix(r) + '</td>' +
         '<td class="num implied">' + fmtM(r.implied_value_usd) + '<span class="ibar" style="width:' + bar + 'px"></span>' +
           '<span class="rng">' + fmtM(r.implied_low_usd) + ' – ' + fmtM(r.implied_high_usd) + '</span></td>' +
@@ -213,7 +265,7 @@
     }).join('');
     $('rows').innerHTML = html;
     $('rowcount').textContent = rows.length + ' of ' + R.rows.length + ' protocols shown · ranked by implied value under ' + R.model_version +
-      ' · every value carries a held-out range · j/k move · enter open · esc back · / search';
+      ' · every value is TVL × market multiple × token odds, with a held-out range · j/k move · enter open · esc back · / search';
   }
 
   // ---------- spotlight rail ----------
@@ -233,7 +285,7 @@
     }).join('');
     $('raillegend').innerHTML = (R.kept || []).map(function (k) {
       return '<span><i style="background:' + FC[k] + '"></i>' + FL[k] + '</span>';
-    }).join('');
+    }).join('') + '<span><i style="background:var(--green)"></i>token odds</span>';
   }
   $('spotlight').addEventListener('click', function (e) {
     var s = e.target.closest('.spot');
@@ -283,8 +335,9 @@
       '</div>' +
       '<h2>How the implied value is derived — ' + esc(r.name) + '</h2>' +
       '<div class="contrib"><div class="cbar">' + segs + '</div><div class="clegend">' + legend + '</div>' +
-        '<div class="formula" style="margin:12px 0 0">log ratio = ' + R.intercept.toFixed(4) + ' + Σ (weight × factor) = ' + r.log_ratio.toFixed(4) +
-        '<br>implied value = TVL × e^(' + r.log_ratio.toFixed(4) + ') = ' + fmtM(r.tvl_usd) + ' × ' + r.implied_multiple.toFixed(4) + ' = ' + fmtM(r.implied_value_usd) + '</div></div>' +
+        '<div class="formula" style="margin:12px 0 0">implied value = TVL × market multiple × token odds<br>' +
+        'market multiple = e^(' + r.log_ratio.toFixed(4) + ') = ' + (r.market_multiple || 0).toFixed(4) + '× · token odds = ' + pc1(r.token_odds || 0) +
+        '<br>' + fmtM(r.tvl_usd) + ' × ' + (r.market_multiple || 0).toFixed(4) + ' × ' + (r.token_odds || 0).toFixed(4) + ' = ' + fmtM(r.implied_value_usd) + '</div></div>' +
       '<h2>The range this value really carries</h2>' +
       '<div class="range-band"><div class="track"><span class="span" style="left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%"></span><span class="mid" style="left:' + mid.toFixed(2) + '%"></span></div>' +
         '<div class="lbl"><span>low ' + fmtM(r.implied_low_usd) + '</span><span>base ' + fmtM(r.implied_value_usd) + '</span><span>high ' + fmtM(r.implied_high_usd) + '</span></div></div>' +
@@ -313,7 +366,6 @@
 
   // ---------- model + validation panel ----------
   function renderModel() {
-    var pc = function (x) { return (x * 100).toFixed(1) + '%'; };
     var rows = [
       ['intercept', 'the base ratio before any factor: e^' + R.intercept.toFixed(4) + ' = ' + Math.exp(R.intercept).toFixed(4) + '× TVL'],
       ['kept factors', (R.kept || []).join(', ') || 'none'],
@@ -330,14 +382,24 @@
           '<td class="why">' + esc(f.reason) + '</td></tr>';
       }).join('') + '</tbody></table>';
 
+    var oddsRows = (O.features || []).map(function (f) {
+      return '<tr><td>' + esc(f.label) + '</td><td class="' + (f.kept ? 'keep' : 'drop') + '">' + (f.kept ? 'KEPT' : 'DROPPED') + '</td>' +
+        '<td class="num">' + f.brier.toFixed(4) + '</td><td class="num">' + f.auc.toFixed(3) + '</td>' +
+        '<td class="why">' + esc(f.reason) + '</td></tr>';
+    }).join('');
+
     $('modelbody').innerHTML =
-      '<div class="formula">The model is fitted, not asserted. It is fitted on the snapshot\'s ' + V.universe + ' live-token protocols — the ones whose token already trades, so the market\'s own answer is known — and tested on rows it never saw.<br>' +
-      '<b>walk-forward</b> · ' + esc(V.schemes.walkforward.replace(/^walk-forward: /, '')) + ' → r = ' + V.final.walkforward.r.toFixed(3) + ', rank correlation ' + V.final.walkforward.rho.toFixed(3) + ', median error ' + pc(V.final.walkforward.ape) + ' (baseline ' + pc(V.final.walkforward.baseline_ape) + ')<br>' +
-      '<b>leave-one-out</b> · ' + esc(V.schemes.loo.replace(/^leave-one-out: /, '')) + ' → r = ' + V.final.loo.r.toFixed(3) + ', rank correlation ' + V.final.loo.rho.toFixed(3) + ', median error ' + pc(V.final.loo.ape) + ' (baseline ' + pc(V.final.loo.baseline_ape) + ')<br>' +
+      '<div class="formula">The model is fitted, not asserted. The value model is fitted on the snapshot\'s ' + V.universe + ' live-token protocols — the ones whose token already trades, so the market\'s own answer is known — and tested on rows it never saw.<br>' +
+      '<b>walk-forward</b> · ' + esc(V.schemes.walkforward.replace(/^walk-forward: /, '')) + ' → r = ' + V.final.walkforward.r.toFixed(3) + ', rank correlation ' + V.final.walkforward.rho.toFixed(3) + ', median error ' + pc1(V.final.walkforward.ape) + ' (baseline ' + pc1(V.final.walkforward.baseline_ape) + ')<br>' +
+      '<b>leave-one-out</b> · ' + esc(V.schemes.loo.replace(/^leave-one-out: /, '')) + ' → r = ' + V.final.loo.r.toFixed(3) + ', rank correlation ' + V.final.loo.rho.toFixed(3) + ', median error ' + pc1(V.final.loo.ape) + ' (baseline ' + pc1(V.final.loo.baseline_ape) + ')<br>' +
       'The baseline predicts the market\'s median ratio for every row; an error ratio below 1 means the model beats it.<br>' +
-      'implied value = TVL × e^(log ratio), where log ratio = ' + R.intercept.toFixed(4) + ' + Σ (weight × factor)<br>' +
+      'implied value = TVL × market multiple × token odds, where market multiple = e^(log ratio), log ratio = ' + R.intercept.toFixed(4) + ' + Σ (weight × factor)<br>' +
       'Each row\'s range is its base value × e^(±' + R.range_error_log.toFixed(3) + '), the model\'s own held-out median error: the spread is the model\'s, not a decoration.<br>' +
       'The board ranks protocols that record no token at all — no market cap, no gecko id, no symbol — and that stand on their own rather than as a wrapped, staked or bridged product of a token that trades; protocols with a token are shown apart, in the live strip, at the market\'s own value and never ranked.</div>' +
+      '<div class="formula"><b>THE TOKEN-ODDS MODEL</b> — the probability that a protocol issues a token at all, fitted on the snapshot\'s own issuance record and tested on the newest 40% of it.<br>' +
+      'AUC ' + (O.auc || 0).toFixed(3) + ' against a 0.500 baseline (the training set\'s own issuance rate for every row) · Brier ' + (O.brier || 0).toFixed(4) + ' against the baseline\'s ' + (O.brier_baseline || 0).toFixed(4) + ' · skill ' + pc1(O.skill || 0) + '<br>' +
+      'fitted on ' + O.train_n + ' rows, scored on ' + O.test_n + ' it never saw · features kept: ' + ((O.kept || []).join(', ') || 'none') + '</div>' +
+      '<table class="vtable"><thead><tr><th>ODDS FEATURE</th><th>DECISION</th><th class="num">Brier</th><th class="num">AUC</th><th>WHY</th></tr></thead><tbody>' + oddsRows + '</tbody></table>' +
       abl +
       rows.map(function (r) { return '<div class="mrow"><span class="mk">' + esc(r[0]) + '</span><span class="mv">' + esc(r[1]) + '</span></div>'; }).join('') +
       '<div class="mrow"><span class="mk">MODEL_VERSION</span><span class="mv">' + R.model_version + '</span></div>';
@@ -350,6 +412,12 @@
       $(v).hidden = v !== id;
     });
     $('liveview').hidden = id !== 'boardview';
+    // The accounting and the model card are the board's own context. On the detail view the
+    // reader is looking at one protocol, and the detail's own derivation is what matters there,
+    // so the two strips fold away and the protocol's own numbers come first.
+    var board = id === 'boardview';
+    $('accounting').hidden = !board;
+    $('modelcard').hidden = !board;
   }
   function route() {
     var h = location.hash;
@@ -379,13 +447,13 @@
   // ---------- CSV export ----------
   function exportCSV() {
     var rows = filtered();
-    var head = ['rank', 'slug', 'name', 'category', 'chains', 'tvl_usd', 'change_7d', 'age_days', 'implied_value_usd', 'implied_low_usd', 'implied_high_usd', 'watchlist', 'farm_cost_usd', 'farm_hours', 'farm_lockup_days', 'farm_value_per_hour', 'farm_verdict'];
+    var head = ['rank', 'slug', 'name', 'category', 'chains', 'tvl_usd', 'change_7d', 'age_days', 'implied_value_usd', 'implied_low_usd', 'implied_high_usd', 'market_multiple', 'token_odds', 'watchlist', 'farm_cost_usd', 'farm_hours', 'farm_lockup_days', 'farm_value_per_hour', 'farm_verdict'];
     function csv(v) {
       v = String(v == null ? '' : v);
       return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
     }
     var lines = [head.join(',')].concat(rows.map(function (r) {
-      return [r.rank, r.slug, r.name, r.category || '', r.chains.join('|'), r.tvl_usd, r.change_7d, r.age_days, r.implied_value_usd, r.implied_low_usd, r.implied_high_usd, r.watchlist ? 1 : 0, r.farm_cost_usd, r.farm_hours, r.farm_lockup_days, r.farm_value_per_hour, r.farm_verdict].map(csv).join(',');
+      return [r.rank, r.slug, r.name, r.category || '', r.chains.join('|'), r.tvl_usd, r.change_7d, r.age_days, r.implied_value_usd, r.implied_low_usd, r.implied_high_usd, r.market_multiple, r.token_odds, r.watchlist ? 1 : 0, r.farm_cost_usd, r.farm_hours, r.farm_lockup_days, r.farm_value_per_hour, r.farm_verdict].map(csv).join(',');
     }));
     var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');
@@ -467,6 +535,8 @@
 
   // ---------- first paint ----------
   $('datasource').textContent = 'Data: ' + R.source;
+  renderAccounting();
+  renderModelCard();
   renderLive();
   renderSpotlight();
   syncControls();

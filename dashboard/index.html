@@ -23,12 +23,19 @@
 
 <section class="integrity" id="integrity" aria-label="data integrity"></section>
 
-<nav class="stats" id="stats" aria-label="board summary"></nav>
-
-<section id="liveview" class="livewrap">
-  <h2>Live token market — already trading, not ranked</h2>
-  <div class="livestrip" id="live"></div>
+<section class="accounting" id="accounting" aria-label="protocol accounting">
+  <div class="acct-head"><h2>Protocol accounting</h2><span class="acct-sub">every protocol in the snapshot, counted once — no remainder</span></div>
+  <div class="acct" id="acctbody"></div>
+  <p class="acct-foot" id="acctfoot"></p>
 </section>
+
+<section class="modelcard" id="modelcard" aria-label="value model">
+  <div class="acct-head"><h2>The value model</h2><span class="acct-sub">fitted on the market\'s own answers, then tested held-out</span></div>
+  <div class="mrow2" id="modelhead"></div>
+  <p class="mnote" id="modelnote"></p>
+</section>
+
+<nav class="stats" id="stats" aria-label="board summary"></nav>
 
 <main id="main">
   <section id="boardview" class="view">
@@ -41,7 +48,7 @@
       <label class="ftoggle"><input type="checkbox" id="f-wl"> Watchlist only</label>
       <button type="button" id="f-clear" class="ghost">Clear <span id="f-count"></span></button>
       <button type="button" id="f-csv" class="ghost">Export CSV</button>
-      <button type="button" id="f-model" class="ghost">Model &amp; validation</button>
+      <button type="button" id="f-model" class="ghost">Full validation</button>
     </div>
     <div class="chips" id="chips"></div>
     <div class="boardwrap">
@@ -51,10 +58,10 @@
             <th data-k="rank" class="num">Rank</th>
             <th data-k="name">Protocol</th>
             <th data-k="category">Category</th>
-            <th data-k="chains">Chains</th>
             <th data-k="tvl_usd" class="num">TVL</th>
             <th data-k="change_7d" class="num">7d</th>
-            <th class="mix" title="how the implied value is derived: TVL scale, listing age, no-token duration and chain breadth, each against the board's own range">How the value is derived</th>
+            <th data-k="token_odds" class="num">Token odds</th>
+            <th class="mix" title="how the implied value is derived: the market multiple and the token odds, each against the board's own range">How the value is derived</th>
             <th data-k="implied_value_usd" class="num">Implied value</th>
             <th data-k="farm_cost_usd" class="num">Cost</th>
             <th data-k="farm_value_per_hour" class="num">$/hour</th>
@@ -70,6 +77,11 @@
       </aside>
     </div>
     <p class="rowcount" id="rowcount"></p>
+  </section>
+
+  <section id="liveview" class="livewrap">
+    <h2>Live token market — already trading, not ranked</h2>
+    <div class="livestrip" id="live"></div>
   </section>
 
   <section id="detailview" class="view" hidden></section>

@@ -70,6 +70,8 @@ writeFileSync(join(out, 'board.json'), boardBytes);
  * dashboard shows the strip, so the screenshots and the code carry the same facts.
  */
 const watchlistCovered = snapshot.watchlist.filter((s) => board.some((r) => r.slug === s)).length;
+const accounting = radar.accounting;
+const accountingSum = accounting.buckets.reduce((n, b) => n + b.count, 0);
 const integrity = {
   snapshot_sha256: sha256(Buffer.from(snapshotText, 'utf8')),
   snapshot_as_of: snapshot.as_of,
@@ -82,6 +84,9 @@ const integrity = {
   board_sha256: boardSha,
   data_sha256: '',
   model_version: radar.model_version,
+  /** The protocol accounting's own sum, against the snapshot's protocol count. */
+  accounting_sum: accountingSum,
+  accounting_total: accounting.total,
   /** How the three screenshots were made: a headless browser over the output's own dashboard. */
   screenshots: "rendered headless from this output's dashboard/ and data.js",
   screenshot_files: ['1-board.png', '2-detail.png', '3-filtered.png'],
@@ -126,8 +131,9 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 const pc = (x: number): string => `${(x * 100).toFixed(1)}%`;
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+    `token radar: protocol accounting — ${accountingSum} of ${accounting.total} protocols accounted for, no remainder; ${accounting.ranked} ranked, ${accounting.trading} trading, ${accounting.token_recorded} token recorded, ${accounting.excluded} excluded by ${accounting.excluded_by_reason.map((r) => r.reason + ' ' + r.count).join(', ')}\n` +
     `token radar: watchlist covered ${watchlistCovered}/${snapshot.watchlist.length}, board.json ${boardSha.slice(0, 16)}…, data.js ${dataSha.slice(0, 16)}…\n` +
-    `token radar: validation — walk-forward r=${report.final.walkforward.r.toFixed(3)} (ape ${pc(report.final.walkforward.ape)}), leave-one-out r=${report.final.loo.r.toFixed(3)} (ape ${pc(report.final.loo.ape)}), ${report.universe} live-token rows\n` +
-    `token radar: factors kept ${report.kept.join(', ')}; dropped ${report.dropped.map((d) => d.key).join(', ') || 'none'}\n` +
+    `token radar: value model — walk-forward r=${report.final.walkforward.r.toFixed(3)} (ape ${pc(report.final.walkforward.ape)}), leave-one-out r=${report.final.loo.r.toFixed(3)} (ape ${pc(report.final.loo.ape)}), ${report.universe} live-token rows; factors kept ${report.kept.join(', ') || 'none'}\n` +
+    `token radar: token odds — held-out AUC ${report.odds.auc.toFixed(3)} (baseline 0.500), Brier skill ${pc(report.odds.skill)}, features ${report.odds.kept.join(', ') || 'none'}\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (3 files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );

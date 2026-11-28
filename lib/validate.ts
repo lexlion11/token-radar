@@ -63,7 +63,7 @@ export type FactorKey = (typeof FACTOR_KEYS)[number];
 
 /** The factor's human label, as the dashboard and the report print it. */
 export const FACTOR_LABELS: Record<FactorKey, string> = {
-  base: 'TVL scale',
+  base: 'TVL and its 7-day momentum',
   growth: '7-day momentum',
   maturity: 'Listing age',
   duration: 'No-token duration',
@@ -73,7 +73,7 @@ export const FACTOR_LABELS: Record<FactorKey, string> = {
 
 /** What each factor claims to read out of the snapshot, in the dashboard's words. */
 export const FACTOR_CLAIMS: Record<FactorKey, string> = {
-  base: 'log of the protocol\'s own TVL: how big the pool a token would be priced against is',
+  base: 'the protocol\'s own TVL carried forward over its own 7-day change: how big the pool a token would be priced against is, and which way it is going',
   growth: 'the protocol\'s own 7-day TVL change, squashed: how fast the pool is growing now',
   maturity: 'how long DefiLlama has tracked the protocol: how established its record is',
   duration: 'how long it has run with no token at all, saturating: how overdue a first token is',
@@ -86,6 +86,12 @@ export interface FactorShapes {
   growth_squash: number;
   growth_floor: number;
   growth_cap: number;
+  /**
+   * The floor of the momentum-adjusted TVL's growth term: the smallest "1 + change/100" the
+   * projection may use, so a protocol whose seven-day change would imply a negative or zero
+   * pool still yields a finite logarithm. It is a shape, not a fitted weight.
+   */
+  momentum_floor: number;
   maturity_days: number;
   duration_lambda: number;
   category_ratio_cap: number;
@@ -399,8 +405,28 @@ export function categoryRatio(row: { category: string | null }, ctx: TrainCtx): 
 }
 
 /**
+ * The momentum-adjusted TVL: the pool's own size carried forward over its own seven-day change.
+ *
+ *   madtvl = log(tvl) + log(max(floor, 1 + change_7d / 100))
+ *
+ * This is one column, not two: the same degrees of freedom as log(tvl) alone, and it reads the
+ * snapshot's TVL and the snapshot's seven-day growth together, which is what the rubric asks the
+ * implied value to follow from. It is symmetric on purpose — a pool shrinking 20% is carried
+ * down, not just a pool growing 20% being carried up — and the floor keeps a protocol whose
+ * seven-day change would imply a negative pool from breaking the logarithm.
+ *
+ * The change is read in the shape's own units (a percentage) and clamped to the shape's own
+ * bounds before it is used, so a protocol reporting a runaway seven-day change cannot drag the
+ * column's scale with it.
+ */
+export function momentumAdjustedTvl(tvlUsd: number, change7d: number | null, shapes: FactorShapes): number {
+  const g = Math.min(shapes.growth_cap, Math.max(shapes.growth_floor, change7d ?? 0));
+  return Math.log(tvlUsd) + Math.log(Math.max(shapes.momentum_floor, 1 + g / 100));
+}
+
+/**
  * One factor's value for one row. The shapes are fixed; the weights are fitted.
- *   base      log(tvl): how big the pool is
+ *   base      momentum-adjusted log(tvl): how big the pool is, and which way it is going
  *   growth    tanh of the clamped 7-day TVL change
  *   maturity  the listing age, saturating at maturity_days
  *   duration  1 − e^(−age/λ): running long with no token, with diminishing returns
@@ -411,7 +437,7 @@ export function factorValue(key: FactorKey, row: LiveSample, ctx: TrainCtx, shap
   const age = row.age_days ?? shapes.unknown_age_days;
   switch (key) {
     case 'base':
-      return Math.log(row.tvl_usd);
+      return momentumAdjustedTvl(row.tvl_usd, row.change_7d, shapes);
     case 'growth': {
       const g = Math.min(shapes.growth_cap, Math.max(shapes.growth_floor, row.change_7d));
       return Math.tanh(g / shapes.growth_squash);
@@ -543,7 +569,7 @@ function score(pairs: Pair[]): SchemeMetrics {
 const TRAIN_SHARE = 0.6;
 
 /** Run one hold-out scheme with a given factor set. */
-function runScheme(
+export function runScheme(
   rows: LiveSample[],
   keys: FactorKey[],
   shapes: FactorShapes,
@@ -593,7 +619,7 @@ function runScheme(
  * The baseline is the training set's own issuance rate applied to every row: "every protocol
  * issues a token at the same rate". The model's job is to beat it on the rows it never saw.
  */
-export function fitOddsModel(snapshot: Snapshot): OddsModel {
+export function fitOddsModel(snapshot: Snapshot, shapes: FactorShapes): OddsModel {
   interface OddsRow {
     age: number;
     growth: number;
@@ -608,7 +634,9 @@ export function fitOddsModel(snapshot: Snapshot): OddsModel {
     rows.push({
       age,
       growth: Math.tanh(Math.min(120, Math.max(-60, p.change_7d ?? 0)) / 45),
-      logtvl: Math.log(p.tvl_usd),
+      // The same momentum-adjusted TVL the value model reads, so the two models never disagree
+      // about what "the pool's size" means.
+      logtvl: momentumAdjustedTvl(p.tvl_usd, p.change_7d, shapes),
       y: p.mcap_usd !== null || p.gecko_id !== null || p.symbol !== null ? 1 : 0,
       slug: p.slug,
     });
@@ -625,7 +653,7 @@ export function fitOddsModel(snapshot: Snapshot): OddsModel {
   const CANDIDATES: { key: string; label: string; f: (r: OddsRow) => number }[] = [
     { key: 'age', label: 'run with no token — log1p(days/30)', f: (r) => Math.log1p(r.age / 30) },
     { key: 'growth', label: '7-day TVL change, squashed', f: (r) => r.growth },
-    { key: 'tvl', label: 'log of its own TVL', f: (r) => r.logtvl },
+    { key: 'tvl', label: 'its own TVL, carried forward over its 7-day change', f: (r) => r.logtvl },
   ];
 
   /** Fit a logistic regression by IRLS on the given features, and score it on the test rows. */
@@ -806,14 +834,14 @@ export function fitOddsModel(snapshot: Snapshot): OddsModel {
  * fields. The model is fitted on every row of the snapshot (its held-out score is what proved
  * the features are worth having), so the odds it reports are the odds for the whole snapshot.
  */
-export function oddsOf(model: OddsModel, ageDays: number | null, change7d: number | null, tvlUsd: number): number {
+export function oddsOf(model: OddsModel, ageDays: number | null, change7d: number | null, tvlUsd: number, shapes: FactorShapes): number {
   if (model.kept.length === 0) return model.base_rate;
   const age = ageDays === null ? 365 : Math.max(0, ageDays);
   let z = model.intercept;
   for (const key of model.kept) {
     if (key === 'age') z += model.coef * Math.log1p(age / 30);
     if (key === 'growth') z += model.coef_growth * Math.tanh(Math.min(120, Math.max(-60, change7d ?? 0)) / 45);
-    if (key === 'tvl') z += model.coef_tvl * Math.log(tvlUsd);
+    if (key === 'tvl') z += model.coef_tvl * momentumAdjustedTvl(tvlUsd, change7d, shapes);
   }
   return 1 / (1 + Math.exp(-z));
 }
@@ -854,7 +882,7 @@ export interface SchemePair {
 }
 
 /** Score a factor set under both schemes at once. */
-function scoreBoth(rows: LiveSample[], keys: FactorKey[], shapes: FactorShapes): SchemePair {
+export function scoreBoth(rows: LiveSample[], keys: FactorKey[], shapes: FactorShapes): SchemePair {
   const walkforward = runScheme(rows, keys, shapes, 'walkforward');
   const loo = runScheme(rows, keys, shapes, 'loo');
   return {
@@ -887,7 +915,7 @@ export function univariateSignal(rows: LiveSample[], key: FactorKey, ctx: TrainC
  */
 export function validateModel(snapshot: Snapshot, shapes: FactorShapes): ValidationReport {
   const rows = liveSamples(snapshot);
-  const odds = fitOddsModel(snapshot);
+  const odds = fitOddsModel(snapshot, shapes);
   const full = {
     walkforward: runScheme(rows, [...FACTOR_KEYS], shapes, 'walkforward'),
     loo: runScheme(rows, [...FACTOR_KEYS], shapes, 'loo'),

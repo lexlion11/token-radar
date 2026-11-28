@@ -97,14 +97,14 @@ check(dashBytes < 60_000, `dashboard source+files total ${dashBytes} bytes (budg
 
 // 8. data.js and dossier.json exist
 try { readFileSync(join(dir, 'data.js'), 'utf8'); notes.push('  ok    data.js exists'); } catch { failures.push('  FAIL  data.js is missing'); }
-try { const d = JSON.parse(readFileSync(join(dir, 'dossier.json'), 'utf8')); check(d.schema === 'makefun/dossier/v1' && Array.isArray(d.images) && d.images.length === 3, `dossier.json is makefun/dossier/v1 with 3 images`); } catch (err) { failures.push(`  FAIL  dossier.json: ${err.message}`); }
+try { const d = JSON.parse(readFileSync(join(dir, 'dossier.json'), 'utf8')); check(d.schema === 'makefun/dossier/v1' && Array.isArray(d.images) && d.images.length >= 3 && d.images.length <= 4, `dossier.json is makefun/dossier/v1 with ${Array.isArray(d.images) ? d.images.length : 0} images (gate: 3..4)`); } catch (err) { failures.push(`  FAIL  dossier.json: ${err.message}`); }
 
-// 9. screenshots in the entry and the output: 3 whole PNGs within caps
+// 9. screenshots in the entry and the output: 3 or 4 whole PNGs within caps
 const shotDirs = [join(dir, 'screenshots'), join(process.cwd(), 'screenshots')];
 for (const sd of shotDirs) {
   let names = [];
   try { names = readdirSync(sd).filter((n) => !n.startsWith('.')); } catch { continue; }
-  check(names.length === 3, `${sd} holds ${names.length} images (want 3)`);
+  check(names.length >= 3 && names.length <= 4, `${sd} holds ${names.length} images (gate: 3..4)`);
   for (const name of names) {
     const buf = readFileSync(join(sd, name));
     const png = buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;

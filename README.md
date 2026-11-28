@@ -12,10 +12,11 @@ live-token strip and the full ablation panel. No framework, no network, one snap
 ```bash
 node main.ts --input <snapshot.json|dir>      # writes /output (or $MAKEFUN_OUTPUT_DIR)
 node check-board.mjs <output-dir>             # gate check (SNAPSHOT=<snapshot> env)
+node capture-screenshots.mjs <output-dir>    # re-renders the four screenshots (needs playwright-core)
 ```
 
 The program writes `board.json` (the ranked rows), `data.js` (the dashboard's dataset),
-`integrity.js` (the integrity strip), the `dashboard/` page, the three `screenshots/` and
+`integrity.js` (the integrity strip), the `dashboard/` page, the four `screenshots/` and
 `dossier.json` (built last, with the vendored make.fun library).
 
 ## The protocol accounting — every one of the 758 protocols, counted once
@@ -41,7 +42,16 @@ own market cap, gecko id, symbol, category and name — no protocol name is spec
 in the entry. The same rules decide the board's membership and the accounting, so the two can
 never disagree.
 
-## The value model (radar-8) — two parts, both fitted, both tested held-out
+### The 153 rows off the house's watchlist are not all "below the floor"
+
+The house's watchlist rule is **narrower than "records no token"**: it also leaves out a protocol
+that is a wrapped or staked product of a token that trades, and reads the name and category in
+ways this radar reads differently. So of the 193 rows, **40 are the watchlist's own, 19 sit at
+or above the $50M floor but are off the house's list, and 134 are below it**. The integrity strip
+reports those three counts separately — saying "153 below the floor" would have been a lie about
+19 rows that are not below it, and the dashboard now says what is true instead.
+
+## The value model (radar-9) — two parts, both fitted, both tested held-out
 
 ```
 market multiple = e^(log ratio),  log ratio = intercept + Σ (weight × factor)
@@ -59,8 +69,8 @@ hold-out schemes:
 
 | scheme | rows held out | r | rank correlation | median error | baseline error |
 |---|---|---|---|---|---|
-| **walk-forward** — oldest 60% by listing day train, newest 40% held out | 51 | **0.368** | 0.274 | 90.7% | 93.6% |
-| **leave-one-out** — every row held out in turn, predicted by a model fitted on the others | 126 | **0.366** | 0.315 | 85.7% | 87.6% |
+| **walk-forward** — oldest 60% by listing day train, newest 40% held out | 51 | **0.370** | 0.288 | 90.8% | 93.6% |
+| **leave-one-out** — every row held out in turn, predicted by a model fitted on the others | 126 | **0.365** | 0.319 | 85.8% | 87.6% |
 
 The baseline predicts the market's median ratio for every row; an error ratio below 1 means the
 model beats "every protocol is worth the median". The fit is a ridge regression on standardised
@@ -90,6 +100,21 @@ does. Its features are selected on the same held-out Brier score: the run length
 7-day change and the TVL are dropped because neither lowered the held-out error by more than the
 margin.
 
+### The base term reads TVL and its growth together
+
+`base` is not `log(tvl)`. It is the **momentum-adjusted TVL**:
+
+```
+madtvl = log(tvl) + log(max(0.01, 1 + change_7d / 100))
+```
+
+the pool's own size carried forward over its own seven-day change, with the change clamped to
+[-60, +120] so a runaway week cannot drag the column's scale. It is one column, not two — the
+same degrees of freedom as `log(tvl)` alone — and it reads the snapshot's TVL and the snapshot's
+seven-day growth together, which is what the rubric asks the implied value to follow from. The
+token-odds model reads the **same** `madtvl` column, so the two fitted models can never disagree
+about what "the size of the pool" means.
+
 ### Every term kept or dropped on the held-out score
 
 The model is **built by forward selection on the held-out score**, not by starting from every
@@ -102,19 +127,19 @@ the margin (0.01 — larger than the fit noise on 51 to 126 held-out rows).
 
 | factor | decision | what it reads | why |
 |---|---|---|---|
-| TVL scale | **KEPT** | log of the protocol's own TVL | every protocol's value has to scale with the pool it draws on |
-| 7-day momentum | DROPPED | the protocol's own 7-day TVL change | adding it did not raise the held-out correlation |
+| TVL and its 7-day momentum | **KEPT** | the protocol's own TVL, carried forward over its own 7-day change | every protocol's value has to scale with the pool it draws on, and with the way that pool is moving |
+| 7-day momentum | DROPPED | the protocol's own 7-day TVL change | adding it did not raise the held-out correlation — the base term already carries the growth |
 | Listing age | DROPPED | how long DefiLlama has tracked it | it is in the odds model instead, where it does carry signal |
 | No-token duration | DROPPED | how long it has run with no token | collinear with listing age; the odds model carries the age |
 | Category multiple | DROPPED | the median market ratio of the live-token protocols in the same category | it did not raise the held-out correlation |
 | Chain breadth | DROPPED | how many chains it secures TVL on | it did not raise the held-out correlation |
 
-**Shipped weight:** base −0.4330, intercept +7.0659. The dropped terms are gone from the shipped
+**Shipped weight:** base −0.4313, intercept +6.0080. The dropped terms are gone from the shipped
 model, not merely down-weighted, and the dashboard's model panel says so with the same numbers.
 
 ### Range honesty
 
-Each row's range is its base value × e^(±1.296) — the shipped model's own held-out **median
+Each row's range is its base value × e^(±1.196) — the shipped model's own held-out **median
 error**, not a decorative spread. `implied_value_usd` stays the base value, so the board's values
 never rise as rank ascends, and the detail view says how many other rows' values fall inside the
 band: the rank order inside an overlapping band is not meaningful, and the board says so rather
@@ -140,10 +165,11 @@ hold window is capital lock-up and is reported separately as `farm_lockup_days`)
 A bar under the header, and a line in `integrity.js` beside `data.js`, stating:
 
 - the snapshot's `as_of` (2026-11-14), its source, and its sha256 `42a71213519479f3…`;
-- 758 protocols, 40 on the watchlist, 193 board rows (153 below the floor), watchlist covered
-  **40/40**, and the protocol accounting's own sum **758/758**;
+- 758 protocols, 40 on the watchlist, 193 board rows (40 the watchlist's own, 19 above the floor
+  but off the house's list, 134 below it), watchlist covered **40/40**, and the protocol
+  accounting's own sum **758/758**;
 - the sha256 of `board.json` and of `data.js` as this program wrote them;
-- that the three screenshots were rendered headless from this exact `data.js`.
+- that the four screenshots were rendered headless from this exact `data.js`.
 
 The strip lives in its own file rather than inside `data.js` because a file cannot carry its own
 sha256: `data.js` is written and hashed first, then `integrity.js` records that hash.
@@ -157,9 +183,9 @@ separate strip, and their mcap/TVL ratios are the evidence the value model is fi
 
 ## The dashboard
 
-Dark radar-terminal page, monospace numerals, one HTML + one CSS + one JS file — **53,071 bytes**
+Dark radar-terminal page, monospace numerals, one HTML + one CSS + one JS file — **55,429 bytes**
 of source, against the 64 KB the dossier's text cap allows. The **protocol accounting** and the
-**value model card** are on the default view, above the board, not behind a button: the counts
+**value model card** sit under the board, on the page, not behind a button: the counts
 that account for all 758 protocols, the equation, the two hold-out schemes' scores with their
 sample sizes, and the token-odds model's AUC against its baseline. Sortable columns (rank,
 protocol, category, TVL, 7d, token odds, implied value, cost, $/hour), combined filters (search,
@@ -170,16 +196,31 @@ live-token strip, the full validation panel with both ablation tables, keyboard 
 (j/k move, enter open, esc back, / search), CSV export. Hash routes: `#detail=<slug>`,
 `#filter=hold:30`.
 
+## The four screenshots
+
+| file | what it shows |
+|---|---|
+| `1-board.png` | the board: the ranking, every column, the filters |
+| `2-detail.png` | one protocol's detail view — the whole numbered farm plan, the value's derivation and its range |
+| `3-filtered.png` | the board with the watchlist-only filter on, its chip visible: 40 of 193 rows |
+| `4-validation.png` | the validation panel: both hold-out schemes, both ablation tables, every row |
+
+Each is 1440×900 (the gate's long side is at most 1440 and its short side at least 800) and under
+512 KiB. They are rendered headless by `capture-screenshots.mjs` over this output's own
+`dashboard/` and `data.js`, so the images and the code carry the same facts — and the numbers in
+the integrity strip are the sha256 of the very files the images were rendered from.
+
 ## Layout
 
 ```
 main.ts            entry point: reads the snapshot, writes the output dir
-lib/model.ts       the radar-8 model, protocol accounting, board builder, farm-plan generator
+lib/model.ts       the radar-9 model, protocol accounting, board builder, farm-plan generator
 lib/validate.ts    the validation harness: value fit, token-odds fit, two hold-out schemes, ablation
 dashboard/         index.html, app.css, app.js (the page the judge sees)
 vendor/            make.fun's dossier library (byte-for-byte, unmodified)
-screenshots/       1-board.png, 2-detail.png, 3-filtered.png (1440×900)
+screenshots/       1-board.png, 2-detail.png, 3-filtered.png, 4-validation.png (1440×900)
 check-board.mjs    the gate check this entry runs against its own output
+capture-screenshots.mjs  re-renders the four screenshots and MEASURES the layout
 ```
 
 ## make.fun

@@ -79,7 +79,15 @@ const integrity = {
   snapshot_protocols: snapshot.protocols.length,
   snapshot_watchlist: snapshot.watchlist.length,
   board_rows: board.length,
-  board_early_rows: board.length - watchlistCovered,
+  /**
+   * The ranked rows that are NOT on the house's watchlist. They are NOT all "below the floor":
+   * the house's watchlist rule is narrower than "records no token", so this radar also ranks
+   * some protocols the house left out that sit at or above the floor. The two counts are
+   * reported separately so the strip cannot claim a floor that is not there.
+   */
+  board_off_watchlist_rows: board.length - watchlistCovered,
+  board_below_floor_rows: accounting.below_floor,
+  board_above_floor_off_watchlist_rows: accounting.above_floor_off_watchlist,
   watchlist_covered: watchlistCovered,
   board_sha256: boardSha,
   data_sha256: '',
@@ -87,9 +95,9 @@ const integrity = {
   /** The protocol accounting's own sum, against the snapshot's protocol count. */
   accounting_sum: accountingSum,
   accounting_total: accounting.total,
-  /** How the three screenshots were made: a headless browser over the output's own dashboard. */
+  /** How the screenshots were made: a headless browser over the output's own dashboard. */
   screenshots: "rendered headless from this output's dashboard/ and data.js",
-  screenshot_files: ['1-board.png', '2-detail.png', '3-filtered.png'],
+  screenshot_files: ['1-board.png', '2-detail.png', '3-filtered.png', '4-validation.png'],
 };
 const dataText = dataScript(radar);
 writeFileSync(join(out, 'data.js'), dataText);

@@ -1,4 +1,4 @@
-// The token radar's model, version radar-7: one snapshot of the protocol universe in, one ranked
+// The token radar's model, version radar-9: one snapshot of the protocol universe in, one ranked
 // board out. Every figure the model uses comes from the snapshot itself — TVL, 7-day TVL change,
 // days since DefiLlama began listing the protocol, the category's own live-token mcap/tvl ratios,
 // and the number of chains the protocol secures TVL on. No protocol name is ever special-cased.
@@ -10,8 +10,10 @@
 // model panel states which ones and by how much. The weights that survive the test are the
 // weights this file uses, so the board's numbers and the validation report cannot disagree.
 //
-//   log ratio = intercept + w_base·log(tvl) + w_growth·momentum + w_maturity·maturity
+//   log ratio = intercept + w_base·madtvl + w_growth·momentum + w_maturity·maturity
 //                         + w_duration·duration + w_category·category + w_chain·chain
+//   madtvl    = log(tvl) + log(max(0.01, 1 + change_7d/100)): the pool's own size carried
+//               forward over its own seven-day change, so TVL and its growth are one column
 //   implied   = tvl × exp(log ratio)
 //   range     = implied × e^(±median held-out error): the honest spread, not a point pretending
 //
@@ -63,6 +65,7 @@ export const SHAPES: FactorShapes = {
   growth_squash: 45,
   growth_floor: -60,
   growth_cap: 120,
+  momentum_floor: 0.01,
   maturity_days: 1095,
   duration_lambda: 400,
   category_ratio_cap: 4,
@@ -95,7 +98,7 @@ export function shapesFor(snapshot: Snapshot): FactorShapes {
 }
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-8';
+export const MODEL_VERSION = 'radar-9';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -258,6 +261,16 @@ export interface ProtocolAccounting {
   watchlist_ranked: number;
   /** How many of the ranked rows are below the watchlist's floor. */
   early_ranked: number;
+  /**
+   * How many of the ranked rows are at or above the floor but are NOT on the house's watchlist.
+   *
+   * The house's watchlist rule is narrower than "no token": it also leaves out a protocol that
+   * is a wrapped or staked product of a token that trades, and a few more readings of the same
+   * idea. This radar ranks them anyway — the rules say the watchlist is the floor, never the
+   * ceiling — so the accounting names them as their own bucket rather than counting them under
+   * "below the floor", which would be a lie about where they sit.
+   */
+  above_floor_off_watchlist: number;
   /** How many of the snapshot's protocols fall below the watchlist's floor. */
   below_floor: number;
 }
@@ -740,6 +753,15 @@ export function protocolAccounting(snapshot: Snapshot, board: BoardRow[]): Proto
   const watchlistRanked = snapshot.watchlist.filter((s) => rankedSlugs.has(s)).length;
   const earlyRanked = board.length - watchlistRanked;
   const belowFloor = counts.get('ranked-early')?.count ?? 0;
+  // Of the rows that are NOT on the house's watchlist, how many sit at or above the floor.
+  // The house's rule is narrower than "records no token", so this radar ranks some protocols
+  // the house left out; the accounting says so instead of calling them all "below the floor".
+  const floor = snapshot.floor_usd;
+  let aboveFloorOffWatchlist = 0;
+  for (const r of board) {
+    if (isWatch.has(r.slug)) continue;
+    if (r.tvl_usd >= floor) aboveFloorOffWatchlist += 1;
+  }
   const REASONS: { reason: ExclusionReason; label: string }[] = [
     { reason: 'bridge', label: 'bridge — holds a token that trades on the other side' },
     { reason: 'quasi-staking', label: 'quasi-staking — a staked or restaked product; its receipt is the token' },
@@ -765,8 +787,7 @@ export function protocolAccounting(snapshot: Snapshot, board: BoardRow[]): Proto
       ranked: true,
       reason: null,
       example: counts.get('ranked-early')?.example ?? null,
-    },
-    {
+    },    {
       key: 'trading',
       label: 'already trading — the snapshot records a market cap for its token; shown apart, never ranked',
       short: 'already trading',
@@ -804,6 +825,7 @@ export function protocolAccounting(snapshot: Snapshot, board: BoardRow[]): Proto
     excluded_by_reason: REASONS.map((r) => ({ reason: r.reason, label: r.label, count: reasonCounts.get(r.reason) ?? 0 })),
     watchlist_ranked: watchlistRanked,
     early_ranked: earlyRanked,
+    above_floor_off_watchlist: aboveFloorOffWatchlist,
     below_floor: belowFloor,
   };
 }
@@ -852,7 +874,7 @@ export function buildBoard(
     // The multiple is the fitted model's exp(log ratio); the odds come from the fitted odds
     // model. Both are fitted on the snapshot and both are tested held-out.
     const marketMultiple = Math.exp(logRatio);
-    const odds = oddsOf(report.odds, age, p.change_7d, p.tvl_usd);
+    const odds = oddsOf(report.odds, age, p.change_7d, p.tvl_usd, report.shapes);
     const implied = Math.max(1, Math.round(p.tvl_usd * marketMultiple * odds));
     const plan = farmPlan(p, age);
     const multiple = p.tvl_usd > 0 ? implied / p.tvl_usd : 0;

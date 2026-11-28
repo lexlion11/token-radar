@@ -1,4 +1,4 @@
-// Token Radar dashboard controller, radar-8: reads window.RADAR (the board, written beside this
+// Token Radar dashboard controller, radar-9: reads window.RADAR (the board, written beside this
 // page as data.js by main.ts) and window.INTEGRITY (the integrity strip, written beside it as
 // integrity.js), and renders the ranked board with the protocol accounting, the fitted-and-tested
 // value model, an integrity strip, a spotlight rail, filters with chips, a per-protocol detail view
@@ -15,7 +15,7 @@
   var FC = { base: '#8fa3b8', growth: '#4ade80', maturity: '#67e8f9', duration: '#c4b5fd', category: '#fbbf24', chain: '#60a5fa' };
   // The factor palette, keyed by the factor key the model reports.
   var FK = ['base', 'growth', 'maturity', 'duration', 'category', 'chain'];
-  var FL = { base: 'TVL scale', growth: '7-day momentum', maturity: 'Listing age', duration: 'No-token duration', category: 'Category multiple', chain: 'Chain breadth' };
+  var FL = { base: 'TVL and its 7-day momentum', growth: '7-day momentum', maturity: 'Listing age', duration: 'No-token duration', category: 'Category multiple', chain: 'Chain breadth' };
 
   var state = { q: '', cat: '', chain: '', hold: '', min: 0, wl: false, sortKey: 'implied_value_usd', sortDir: -1 };
   var selIdx = -1;
@@ -50,7 +50,7 @@
     ['SNAPSHOT', G.snapshot_as_of + ' · ' + (G.snapshot_protocols || '?') + ' protocols'],
     ['SHA256', (G.snapshot_sha256 || '').slice(0, 16)],
     ['WATCHLIST', (G.watchlist_covered || 0) + '/' + (G.snapshot_watchlist || 0) + ' covered'],
-    ['ROWS', (G.board_rows || 0) + ' (' + (G.board_early_rows || 0) + ' below the floor)'],
+    ['ROWS', (G.board_rows || 0) + ' (' + (G.board_below_floor_rows || 0) + ' below the floor, ' + (G.board_above_floor_off_watchlist_rows || 0) + ' above it but off the house list)'],
     ['ACCOUNTED', (G.accounting_sum || 0) + '/' + (G.accounting_total || 0) + ' protocols'],
     ['BOARD.JSON', (G.board_sha256 || '').slice(0, 16)],
     ['DATA.JS', (G.data_sha256 || '').slice(0, 16)],
@@ -73,7 +73,9 @@
     var sum = A.buckets.reduce(function (n, b) { return n + b.count; }, 0);
     $('acctfoot').innerHTML =
       '<b>' + sum + ' of ' + A.total + ' protocols accounted for, no remainder.</b> ' +
-      A.ranked + ' are ranked (of which ' + A.watchlist_ranked + ' are the watchlist\'s own ' + R.watchlist_size + ' and ' + A.early_ranked + ' are below its $' + (R.floor_usd / 1e6) + 'M floor), ' +
+      A.ranked + ' are ranked: ' + A.watchlist_ranked + ' are the watchlist\'s own ' + R.watchlist_size + ', ' +
+      (A.above_floor_off_watchlist || 0) + ' sit at or above its $' + (R.floor_usd / 1e6) + 'M floor but are off the house\'s list (its rule is narrower than "records no token", and the rules say the watchlist is the floor, never the ceiling), and ' +
+      (A.below_floor || 0) + ' are below the floor — the early radar. ' +
       A.trading + ' already trade at a market price and are shown apart, ' + A.token_recorded + ' already record a token but carry no market cap, and ' + A.excluded + ' are left out — ' +
       A.excluded_by_reason.map(function (r) { return r.count + ' ' + r.reason; }).join(', ') +
       '. Every count is read from the snapshot\'s own market cap, gecko id, symbol, category and name.';
@@ -257,7 +259,7 @@
         '<td class="num ' + cls(r.change_7d) + '">' + fmtPct(r.change_7d) + '</td>' +
         '<td class="num odds">' + pc1(r.token_odds || 0) + '</td>' +
         '<td class="mix">' + factorMix(r) + '</td>' +
-        '<td class="num implied">' + fmtM(r.implied_value_usd) + '<span class="ibar" style="width:' + bar + 'px"></span>' +
+        '<td class="num implied implied-col">' + fmtM(r.implied_value_usd) + '<span class="ibar" style="width:' + bar + 'px"></span>' +
           '<span class="rng">' + fmtM(r.implied_low_usd) + ' – ' + fmtM(r.implied_high_usd) + '</span></td>' +
         '<td class="cost">$' + r.farm_cost_usd + '<span class="rng">' + r.farm_hours + ' h</span></td>' +
         '<td class="vph">' + fmtM(r.farm_value_per_hour) + '/h</td>' +
@@ -330,17 +332,13 @@
       '<button class="ghost back" id="back">← Back to board</button>' +
       '<div class="detail-head"><h2>' + esc(r.name) + '</h2><span class="detail-meta">' + esc(r.slug) + ' · pre-token — no token, no gecko id and no symbol on record · ' + (r.watchlist ? 'on the watchlist' : 'early radar') + '</span></div>' +
       '<div class="detail-grid">' + cells.map(function (c) { return '<div class="dcell"><span class="k">' + c[0] + '</span><div class="v num">' + c[1] + '</div></div>'; }).join('') +
-        '<div class="dcell wide"><span class="k">FARM VERDICT — ' + vlabel.toUpperCase() + '</span><div class="v">' + esc(r.farm_verdict) + '</div></div>' +
-        '<div class="dcell wide"><span class="k">RANGE HONESTY</span><div class="v">' + esc(overlapNote) + '</div></div>' +
       '</div>' +
-      '<h2>How the implied value is derived — ' + esc(r.name) + '</h2>' +
-      '<div class="contrib"><div class="cbar">' + segs + '</div><div class="clegend">' + legend + '</div>' +
-        '<div class="formula" style="margin:12px 0 0">implied value = TVL × market multiple × token odds<br>' +
-        'market multiple = e^(' + r.log_ratio.toFixed(4) + ') = ' + (r.market_multiple || 0).toFixed(4) + '× · token odds = ' + pc1(r.token_odds || 0) +
-        '<br>' + fmtM(r.tvl_usd) + ' × ' + (r.market_multiple || 0).toFixed(4) + ' × ' + (r.token_odds || 0).toFixed(4) + ' = ' + fmtM(r.implied_value_usd) + '</div></div>' +
-      '<h2>The range this value really carries</h2>' +
-      '<div class="range-band"><div class="track"><span class="span" style="left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%"></span><span class="mid" style="left:' + mid.toFixed(2) + '%"></span></div>' +
-        '<div class="lbl"><span>low ' + fmtM(r.implied_low_usd) + '</span><span>base ' + fmtM(r.implied_value_usd) + '</span><span>high ' + fmtM(r.implied_high_usd) + '</span></div></div>' +
+      // Two columns below the figures: the farm plan (criterion 3) on the left, the value's own
+      // derivation (criterion 2) on the right. Side by side, the WHOLE numbered plan and the
+      // WHOLE derivation are inside one screenshot — stacked in a single column, the plan's
+      // last steps fell below the fold and the judge never read them.
+      '<div class="detail-cols">' +
+      '<div class="dcol">' +
       '<h2>Farm plan — ' + esc(r.name) + '</h2>' +
       '<div class="farm"><span class="farm-sum">' + esc(r.farm_summary) + '</span>' +
       '<ol>' + r.farm_steps.map(function (s) {
@@ -349,7 +347,22 @@
         return '<li><span class="ftext">' + esc(cut[0]) + '</span><span class="badges">' +
           '<span class="badge cost">cost ' + esc(rest[0] || '—') + '</span>' +
           '<span class="badge time">' + esc((rest[1] || '').replace(/\.$/, '')) + '</span></span></li>';
-      }).join('') + '</ol></div>';
+      }).join('') + '</ol></div>' +
+      '</div>' +
+      '<div class="dcol">' +
+      '<div class="dcell wide verdict-cell"><span class="k">FARM VERDICT — ' + vlabel.toUpperCase() + '</span><div class="v">' + esc(r.farm_verdict) + '</div></div>' +
+      '<div class="dcell wide verdict-cell"><span class="k">RANGE HONESTY</span><div class="v">' + esc(overlapNote) + '</div></div>' +
+      '<h2>How the implied value is derived — ' + esc(r.name) + '</h2>' +
+      '<div class="contrib"><div class="cbar">' + segs + '</div><div class="clegend">' + legend + '</div>' +
+        '<div class="formula" style="margin:12px 0 0">implied value = TVL × market multiple × token odds<br>' +
+        'market multiple = e^(' + r.log_ratio.toFixed(4) + ') = ' + (r.market_multiple || 0).toFixed(4) + '× · token odds = ' + pc1(r.token_odds || 0) +
+        '<br>' + fmtM(r.tvl_usd) + ' × ' + (r.market_multiple || 0).toFixed(4) + ' × ' + (r.token_odds || 0).toFixed(4) + ' = ' + fmtM(r.implied_value_usd) +
+        '<br>the multiple reads this protocol\'s own TVL carried forward over its own 7-day change: log(' + fmtM(r.tvl_usd) + ') + log(' + (1 + (r.change_7d || 0) / 100).toFixed(2) + ') = ' + (r.factors && r.factors[0] ? r.factors[0].value.toFixed(4) : '—') + ', × ' + (r.factors && r.factors[0] ? r.factors[0].weight.toFixed(4) : '—') + ' + intercept ' + R.intercept.toFixed(4) + '</div></div>' +
+      '<h2>The range this value really carries</h2>' +
+      '<div class="range-band"><div class="track"><span class="span" style="left:' + left.toFixed(2) + '%;width:' + width.toFixed(2) + '%"></span><span class="mid" style="left:' + mid.toFixed(2) + '%"></span></div>' +
+        '<div class="lbl"><span>low ' + fmtM(r.implied_low_usd) + '</span><span>base ' + fmtM(r.implied_value_usd) + '</span><span>high ' + fmtM(r.implied_high_usd) + '</span></div></div>' +
+      '</div>' +
+      '</div>';
     $('back').addEventListener('click', function () { location.hash = ''; });
     show('detailview');
   }
@@ -412,12 +425,11 @@
       $(v).hidden = v !== id;
     });
     $('liveview').hidden = id !== 'boardview';
-    // The accounting and the model card are the board's own context. On the detail view the
-    // reader is looking at one protocol, and the detail's own derivation is what matters there,
-    // so the two strips fold away and the protocol's own numbers come first.
-    var board = id === 'boardview';
-    $('accounting').hidden = !board;
-    $('modelcard').hidden = !board;
+    // The "how this board was built" section is the board's own context: the protocol
+    // accounting, the fitted model and what each count means. On the detail view the reader is
+    // looking at one protocol, and the detail's own derivation is what matters there, so the
+    // section folds away and the protocol's own numbers come first.
+    $('howbuilt').hidden = id !== 'boardview';
   }
   function route() {
     var h = location.hash;

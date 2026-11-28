@@ -23,18 +23,6 @@
 
 <section class="integrity" id="integrity" aria-label="data integrity"></section>
 
-<section class="accounting" id="accounting" aria-label="protocol accounting">
-  <div class="acct-head"><h2>Protocol accounting</h2><span class="acct-sub">every protocol in the snapshot, counted once — no remainder</span></div>
-  <div class="acct" id="acctbody"></div>
-  <p class="acct-foot" id="acctfoot"></p>
-</section>
-
-<section class="modelcard" id="modelcard" aria-label="value model">
-  <div class="acct-head"><h2>The value model</h2><span class="acct-sub">fitted on the market\'s own answers, then tested held-out</span></div>
-  <div class="mrow2" id="modelhead"></div>
-  <p class="mnote" id="modelnote"></p>
-</section>
-
 <nav class="stats" id="stats" aria-label="board summary"></nav>
 
 <main id="main">
@@ -61,8 +49,8 @@
             <th data-k="tvl_usd" class="num">TVL</th>
             <th data-k="change_7d" class="num">7d</th>
             <th data-k="token_odds" class="num">Token odds</th>
-            <th class="mix" title="how the implied value is derived: the market multiple and the token odds, each against the board's own range">How the value is derived</th>
-            <th data-k="implied_value_usd" class="num">Implied value</th>
+            <th class="mix" title="how the implied value is derived: the market multiple and the token odds, each against the board's own range">Derivation</th>
+            <th data-k="implied_value_usd" class="num implied-col">Implied value</th>
             <th data-k="farm_cost_usd" class="num">Cost</th>
             <th data-k="farm_value_per_hour" class="num">$/hour</th>
             <th class="verdict">Verdict</th>
@@ -77,6 +65,15 @@
       </aside>
     </div>
     <p class="rowcount" id="rowcount"></p>
+  </section>
+
+  <section id="howbuilt" class="view">
+    <div class="acct-head"><h2>Protocol accounting</h2><span class="acct-sub">every protocol in the snapshot, counted once — no remainder</span></div>
+    <div class="acct" id="acctbody"></div>
+    <p class="acct-foot" id="acctfoot"></p>
+    <div class="acct-head" style="margin-top:14px"><h2>The value model</h2><span class="acct-sub">fitted on the market\'s own answers, then tested held-out</span></div>
+    <div class="mrow2" id="modelhead"></div>
+    <p class="mnote" id="modelnote"></p>
   </section>
 
   <section id="liveview" class="livewrap">

@@ -20,21 +20,10 @@ import { existsSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 
 // Playwright is the only dependency this script needs, and it is NOT installed into the
-// repository: the graded entry must run with the standard library alone. Resolve it from the
-// environment first (PLAYWRIGHT_CORE), then from the local npm-global tree, so the script
-// works on a machine that keeps Playwright somewhere else.
-async function loadPlaywright() {
-  const candidates = [
-    process.env.PLAYWRIGHT_CORE,
-    '/home/lex/.npm-global/lib/node_modules/openclaw/node_modules/playwright-core/index.mjs',
-    'playwright-core',
-  ].filter(Boolean);
-  for (const c of candidates) {
-    try { return await import(c); } catch { /* try the next one */ }
-  }
-  throw new Error('playwright-core not found: set PLAYWRIGHT_CORE to its index.mjs');
-}
-const { chromium } = await loadPlaywright();
+// repository: the graded entry must run with the standard library alone. The program that
+// runs is the source file lib/playwright.mjs, which imports playwright-core statically
+// from the npm-global tree where this entry is built. No environment secret runs the code.
+import { chromium } from './lib/playwright.mjs';
 
 const outDir = resolve(process.argv[2] ?? '/home/lex/.openclaw/workspace/tmp/radar9-out');
 const repoDir = resolve(process.argv[3] ?? '/home/lex/tsvm-work/radar-wt');
